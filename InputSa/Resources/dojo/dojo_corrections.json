@@ -1,0 +1,126 @@
+{
+  "entries": [
+    {
+      "wrong": "改刀系統",
+      "correct": "道務系統",
+      "tier": "always"
+    },
+    {
+      "wrong": "妙計大替",
+      "correct": "妙極大帝",
+      "tier": "always"
+    },
+    {
+      "wrong": "六祖談經",
+      "correct": "六祖壇經",
+      "tier": "always"
+    },
+    {
+      "wrong": "禮韻",
+      "correct": "禮運",
+      "tier": "always"
+    },
+    {
+      "wrong": "學傭",
+      "correct": "學庸",
+      "tier": "always"
+    },
+    {
+      "wrong": "金宮祖師",
+      "correct": "金公祖師",
+      "tier": "always"
+    },
+    {
+      "wrong": "月會菩薩",
+      "correct": "月慧菩薩",
+      "tier": "always"
+    },
+    {
+      "wrong": "造君",
+      "correct": "灶君",
+      "tier": "always"
+    },
+    {
+      "wrong": "老樞紐",
+      "correct": "老前人",
+      "tier": "always"
+    },
+    {
+      "wrong": "半道",
+      "correct": "辦道",
+      "tier": "dojoOnly"
+    },
+    {
+      "wrong": "一貫到",
+      "correct": "一貫道",
+      "tier": "dojoOnly"
+    },
+    {
+      "wrong": "院力",
+      "correct": "愿力",
+      "tier": "dojoOnly"
+    },
+    {
+      "wrong": "了院",
+      "correct": "了愿",
+      "tier": "dojoOnly"
+    },
+    {
+      "wrong": "立院",
+      "correct": "立愿",
+      "tier": "dojoOnly"
+    },
+    {
+      "wrong": "老情人",
+      "correct": "老前人",
+      "tier": "dojoOnly"
+    },
+    {
+      "wrong": "點船師",
+      "correct": "點傳師",
+      "tier": "always"
+    },
+    {
+      "wrong": "厚學",
+      "correct": "後學",
+      "tier": "always"
+    },
+    {
+      "wrong": "錢人",
+      "correct": "前人",
+      "tier": "dojoOnly",
+      "phonetic": false
+    },
+    {
+      "wrong": "發願",
+      "correct": "發愿",
+      "tier": "dojoOnly"
+    },
+    {
+      "wrong": "球道",
+      "correct": "求道",
+      "tier": "dojoOnly"
+    },
+    {
+      "wrong": "道物",
+      "correct": "道務",
+      "tier": "dojoOnly"
+    },
+    {
+      "wrong": "休班",
+      "correct": "修辦",
+      "tier": "dojoOnly"
+    },
+    {
+      "wrong": "證人",
+      "correct": "聖人",
+      "tier": "dojoOnly"
+    },
+    {
+      "wrong": "全勝",
+      "correct": "全聖",
+      "tier": "dojoOnly",
+      "phonetic": false
+    }
+  ]
+}

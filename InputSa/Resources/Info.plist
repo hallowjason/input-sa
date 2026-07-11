@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Input-sa</string>
+
+    <key>CFBundleDisplayName</key>
+    <string>Input-sa</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>com.inputsa.inputmethod</string>
+
+    <key>CFBundleVersion</key>
+    <string>2</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>2.0.0</string>
+
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>MacOSX</string>
+    </array>
+
+    <key>CFBundleExecutable</key>
+    <string>Input-sa</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>CFBundleSignature</key>
+    <string>INSA</string>
+
+    <!-- LSUIElement: no Dock icon, runs as background agent with menu bar item -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+
+    <!-- Accessibility permission (required for CGEventTap + AXUIElement) -->
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Input-sa 需要輔助使用功能權限來攔截鍵盤事件並實現注音輸入。</string>
+
+    <!-- Microphone for voice transcription -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Input-sa 需要麥克風存取權限才能使用語音轉錄功能。</string>
+
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
+
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>zh-Hant</string>
+        <string>en</string>
+    </array>
+
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh-Hant</string>
+</dict>
+</plist>

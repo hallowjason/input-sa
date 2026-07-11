@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Input methods cannot use App Sandbox due to IMKit mach port IPC incompatibility -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    <!-- Network access for Groq and Gemini API calls -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <!-- Microphone access for voice transcription (Hardened Runtime, non-sandboxed) -->
+    <!-- com.apple.security.device.audio-input is required for non-sandboxed apps with Hardened Runtime -->
+    <!-- com.apple.security.device.microphone is only for App Sandbox apps -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>

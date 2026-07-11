@@ -1,0 +1,579 @@
+import AppKit
+import Carbon
+import ApplicationServices
+
+/// CGEventTap-based controller for voice transcription and text polishing.
+/// No IMKit / TIS / Bopomofo — AI-powered features only.
+final class InputController: NSObject {
+
+    // MARK: - Sub-systems
+    private let voiceHUD      = VoiceHUDController()
+    private let polishPreview = PolishPreviewController()
+    private var voiceService: VoiceServiceProtocol = GroqVoiceService()
+
+    // MARK: - Event Tap
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+
+    // MARK: - State
+    /// Tracks the key code of the voice key being held; nil when not recording.
+    /// Using key code (not modifier flags) avoids a missed keyUp when the modifier is released first.
+    private var activeVoiceKeyCode: Int? = nil
+    /// True when recording is triggered by Option-alone PTT (flagsChanged path), not a key combo.
+    private var optionKeyRecording = false
+    /// Timestamp when Option-PTT recording started — used to debounce spurious rapid flagsChanged.
+    private var optionRecordingStartTime: Date?
+    /// True when recording is triggered by right-Command translate PTT (中文說話 → 翻譯後注入).
+    private var translateKeyRecording = false
+    private var translateRecordingStartTime: Date?
+    /// AX element that was focused when recording began — used for injection after API calls complete.
+    private var recordingTargetElement: AXUIElement?
+    private lazy var polishHUD: NSPanel = makePolishHUD()
+    private var polishHUDLabel: NSTextField?
+    /// Cached voice shortcut so UserDefaults + JSONDecoder are NOT touched on every keypress.
+    private var cachedVoiceShortcut: ShortcutRecorderView.Shortcut?
+
+    // Key codes (Carbon kVK_* values)
+    private let kVKReturn: Int = 36
+    private let kVKTab:    Int = 48
+    private let kVKEscape: Int = 53
+    private let kVKP:      Int = 35   // 'p' — Ctrl+Option+P opens preferences
+
+    // MARK: - Start / Stop
+    func start() {
+        let mask: CGEventMask =
+            (1 << CGEventType.keyDown.rawValue)    |
+            (1 << CGEventType.keyUp.rawValue)      |
+            (1 << CGEventType.flagsChanged.rawValue)  // Option PTT
+
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: InputController.tapCallback,
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            NSLog("[InputSa] CGEventTap creation failed — check Accessibility permission")
+            return
+        }
+
+        eventTap = tap
+        let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        runLoopSource = src
+        CFRunLoopAddSource(CFRunLoopGetMain(), src, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+
+        // Cache shortcuts and voice service once; refresh whenever UserDefaults changes
+        // (e.g. after saving prefs or switching provider in the preferences window).
+        refreshShortcutCache()
+        refreshVoiceService()
+        NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.refreshShortcutCache()
+            self?.refreshVoiceService()
+        }
+
+        // Wire up polish preview callbacks once — not on every show()
+        polishPreview.onAccept = { [weak self] accepted in
+            self?.injectText(accepted)
+            UserStyleModel.shared.recordVoiceAccepted()
+            self?.polishHUD.orderOut(nil)
+        }
+        polishPreview.onReject = { [weak self] in
+            UserStyleModel.shared.recordVoiceRejected()
+            self?.recordingTargetElement = nil
+            self?.polishHUD.orderOut(nil)
+        }
+
+        NSLog("[InputSa] CGEventTap active (voice + polish mode)")
+    }
+
+    func stop() {
+        if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let src = runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes) }
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    private func refreshShortcutCache() {
+        let sc = PreferencesWindowController.voiceShortcut
+        // Migration: discard the legacy Option+V default (keyCode 9, only Option modifier).
+        // The new default is Option-alone PTT via flagsChanged — no stored shortcut needed.
+        if let sc = sc, sc.keyCode == 9,
+           sc.modifierFlags == NSEvent.ModifierFlags.option.rawValue {
+            PreferencesWindowController.voiceShortcut = nil
+            cachedVoiceShortcut = nil
+        } else {
+            cachedVoiceShortcut = sc
+        }
+    }
+
+    private func refreshVoiceService() {
+        // Skip recreation if already recording — provider switch mid-session is harmless
+        // (the old service holds its own state until the completion fires).
+        guard !voiceService.isRecording else { return }
+        switch APIKeyStore.shared.voiceProvider {
+        case .groq:   voiceService = GroqVoiceService()
+        case .google: voiceService = GoogleVoiceService()
+        case .sherpa: voiceService = SherpaVoiceService()
+        }
+    }
+
+    // MARK: - Static Callback Bridge
+    private static let tapCallback: CGEventTapCallBack = { proxy, type, event, refcon in
+        guard let refcon = refcon else { return Unmanaged.passRetained(event) }
+        let ctrl = Unmanaged<InputController>.fromOpaque(refcon).takeUnretainedValue()
+        return ctrl.handle(proxy: proxy, type: type, event: event)
+    }
+
+    // MARK: - Core Event Handler
+    private func handle(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
+            return Unmanaged.passRetained(event)
+        }
+
+        // ── Bypass when ShortcutRecorderView is actively capturing a new shortcut,
+        //    OR when the Preferences window is the key window.
+        //    Both conditions ensure the local NSEvent monitor in ShortcutRecorderView fires.
+        if ShortcutRecorderView.isCapturing { return Unmanaged.passRetained(event) }
+        if let keyWin = NSApp.keyWindow, keyWin === PreferencesWindowController.shared.window {
+            return Unmanaged.passRetained(event)
+        }
+
+        let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
+        let flags   = event.flags
+
+        // ── Right-Option key walkie-talkie PTT (default when no custom shortcut configured)
+        //    Hold the RIGHT Option alone → record; release → transcribe.
+        //    The LEFT Option (keyCode 58) is intentionally ignored so it keeps its
+        //    native macOS behavior (special characters, app shortcuts). Only the right
+        //    Option (keyCode 61 / kVK_RightOption) starts recording.
+        if type == .flagsChanged {
+            let rightOptionKeyCode  = 61   // kVK_RightOption (left Option = 58)
+            let rightCommandKeyCode = 54   // kVK_RightCommand (left Command = 55)
+            let optionDown  = flags.contains(.maskAlternate)
+            let commandDown = flags.contains(.maskCommand)
+            let pureOption = optionDown
+                && !flags.contains(.maskCommand)
+                && !flags.contains(.maskControl)
+                && !flags.contains(.maskShift)
+            let pureCommand = commandDown
+                && !flags.contains(.maskAlternate)
+                && !flags.contains(.maskControl)
+                && !flags.contains(.maskShift)
+
+            // Right-Option transcription PTT (only when no custom shortcut configured)
+            if cachedVoiceShortcut == nil {
+                if pureOption && keyCode == rightOptionKeyCode
+                    && !optionKeyRecording && !translateKeyRecording && activeVoiceKeyCode == nil {
+                    optionKeyRecording = true
+                    optionRecordingStartTime = Date()
+                    handleVoiceKeyDown(keyCode: keyCode)
+                } else if !optionDown && optionKeyRecording {
+                    // Debounce: ignore spurious rapid flagsChanged within 300 ms of recording start.
+                    // Some macOS versions fire two back-to-back flagsChanged events on a single key press.
+                    let held = optionRecordingStartTime.map { Date().timeIntervalSince($0) } ?? 1.0
+                    if held >= 0.3 {
+                        optionKeyRecording = false
+                        optionRecordingStartTime = nil
+                        handleVoiceKeyUp()
+                    } else {
+                        NSLog("[InputSa] flagsChanged: Option released too quickly (%.2fs) — debounced", held)
+                    }
+                }
+            }
+
+            // Right-Command translate PTT: hold → speak Chinese → release → inject translation.
+            // A keyDown while holding (e.g. right-Cmd+C combo) cancels the recording — see below.
+            if pureCommand && keyCode == rightCommandKeyCode
+                && !translateKeyRecording && !optionKeyRecording && activeVoiceKeyCode == nil {
+                translateKeyRecording = true
+                translateRecordingStartTime = Date()
+                handleVoiceKeyDown(keyCode: keyCode)
+            } else if !commandDown && translateKeyRecording {
+                let held = translateRecordingStartTime.map { Date().timeIntervalSince($0) } ?? 1.0
+                if held >= 0.3 {
+                    translateKeyRecording = false
+                    translateRecordingStartTime = nil
+                    handleVoiceKeyUp(translate: true)
+                } else {
+                    NSLog("[InputSa] flagsChanged: Command released too quickly (%.2fs) — debounced", held)
+                }
+            }
+
+            return Unmanaged.passRetained(event)
+        }
+
+        // ── Cancel translate PTT when the held right-Command turns out to be a combo
+        //    (e.g. right-Cmd+C to copy): discard the recording, let the combo through.
+        if type == .keyDown && translateKeyRecording {
+            translateKeyRecording = false
+            translateRecordingStartTime = nil
+            activeVoiceKeyCode = nil
+            voiceService.cancelRecording()
+            voiceHUD.hide()
+            return Unmanaged.passRetained(event)
+        }
+
+        // ── Ctrl+Option+P: open preferences
+        if type == .keyDown && keyCode == kVKP
+            && flags.contains(.maskControl) && flags.contains(.maskAlternate) {
+            DispatchQueue.main.async {
+                PreferencesWindowController.shared.showPreferences()
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            return nil
+        }
+
+        // ── Voice push-to-talk keyDown (only when user has set a custom shortcut)
+        if type == .keyDown && activeVoiceKeyCode == nil,
+           let sc = cachedVoiceShortcut,
+           matchesShortcut(sc, keyCode: keyCode, flags: flags) {
+            handleVoiceKeyDown(keyCode: keyCode)
+            return nil
+        }
+
+        // ── Voice push-to-talk keyUp (custom shortcut path only)
+        if type == .keyUp, let active = activeVoiceKeyCode, keyCode == active,
+           !optionKeyRecording, !translateKeyRecording {
+            handleVoiceKeyUp()
+            return nil
+        }
+
+        return Unmanaged.passRetained(event)
+    }
+
+    // MARK: - Shortcut Matching
+    /// Matches a user-configured shortcut against the current key event.
+    /// Returns false when no shortcut is configured — Option-alone PTT handles the default case.
+    private func matchesShortcut(
+        _ configured: ShortcutRecorderView.Shortcut,
+        keyCode: Int,
+        flags: CGEventFlags
+    ) -> Bool {
+        let relevant = flags.rawValue & (
+            CGEventFlags.maskControl.rawValue   |
+            CGEventFlags.maskAlternate.rawValue |
+            CGEventFlags.maskShift.rawValue     |
+            CGEventFlags.maskCommand.rawValue
+        )
+        return Int(configured.keyCode) == keyCode && configured.modifierFlags == UInt(relevant)
+    }
+
+    // MARK: - AXUIElement Helper
+    /// Returns the currently focused UI element, or nil if unavailable.
+    private func focusedElement() -> AXUIElement? {
+        let sys = AXUIElementCreateSystemWide()
+        var el: AnyObject?
+        guard AXUIElementCopyAttributeValue(sys, kAXFocusedUIElementAttribute as CFString, &el) == .success
+        else { return nil }
+        return (el as! AXUIElement)
+    }
+
+    // MARK: - Voice Push-to-Talk
+
+    private func handleVoiceKeyDown(keyCode: Int) {
+        activeVoiceKeyCode = keyCode
+        recordingTargetElement = focusedElement()  // snapshot before HUD steals focus
+        voiceService.startRecording()
+        voiceHUD.show(state: .recording, near: getCursorRect(), on: NSScreen.main)
+    }
+
+    private func handleVoiceKeyUp(translate: Bool = false) {
+        activeVoiceKeyCode = nil
+        voiceHUD.setState(.processing("轉錄中…"))
+        voiceService.stopAndTranscribe { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                switch result {
+                case .failure(let err):
+                    self.voiceHUD.hide()
+                    self.showError("轉錄失敗：\(err.localizedDescription)")
+                case .success(let transcript):
+                    // Spoken tail commands (「……請幫我翻譯成英文」) were removed
+                    // 2026-07-06: dictated content that legitimately ends with such a
+                    // phrase is indistinguishable from a command, so translation is
+                    // shortcut-only now (right-⌘, target language set in Preferences).
+                    if translate {
+                        self.runTranslate(transcript)
+                    } else {
+                        self.runAIPolish(transcript)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Translate PTT pipeline: transcript → Gemini translation → inject.
+    /// Unlike polish, a failed translation must NOT inject the original Chinese.
+    /// `lang` overrides the preference (spoken command names its own language).
+    private func runTranslate(_ transcript: String, lang overrideLang: String? = nil) {
+        guard !APIKeyStore.shared.geminiKey.isEmpty else {
+            voiceHUD.hide()
+            showError("語音翻譯需要 Gemini API Key，請在偏好設定（Ctrl+Option+P）填入。")
+            return
+        }
+        let lang = overrideLang ?? TranscriptionMode.translateTargetLanguage
+        voiceHUD.setState(.processing("翻譯成\(lang)…"))
+        GeminiPolishService.shared.enhance(
+            text: transcript,
+            mode: .translate(to: lang),
+            onPartial: { [weak self] partial in
+                self?.voiceHUD.setState(.processing(Self.streamingPreview(partial, label: "翻譯中")))
+            }
+        ) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.voiceHUD.hide()
+                switch result {
+                case .success(let translated):
+                    self.debugLog("translate OK (\(transcript.count) → \(translated.count) chars)")
+                    self.finishAndInject(translated)
+                case .failure(let err):
+                    self.debugLog("translate FAILED: \(err.localizedDescription)")
+                    self.showError("翻譯失敗：\(err.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private func debugLog(_ msg: String) { inputSaLog(msg) }
+
+    /// Gemini polish step in the unified pipeline.
+    /// After polishing (or if Gemini key is absent), injects text directly into the target element.
+    /// No preview step required — text appears immediately; user can Cmd+Z to undo.
+    private func runAIPolish(_ transcript: String) {
+        guard !APIKeyStore.shared.geminiKey.isEmpty else {
+            debugLog("polish SKIPPED (no Gemini key) — injecting raw transcript (\(transcript.count) chars)")
+            voiceHUD.hide()
+            finishAndInject(transcript)
+            return
+        }
+        voiceHUD.setState(.processing("AI 潤飾中…"))
+        GeminiPolishService.shared.polish(
+            selectedText: transcript,
+            mode: .standard,
+            onPartial: { [weak self] partial in
+                self?.voiceHUD.setState(.processing(Self.streamingPreview(partial, label: "潤飾中")))
+            }
+        ) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.voiceHUD.hide()
+                switch result {
+                case .success(let polished):
+                    // Post-polish safety net: re-run the dojo correction table so terms
+                    // the LLM missed or "normalized away" (發願→發愿 etc.) are restored.
+                    let dojoMode = UserDefaults.standard.bool(forKey: "com.inputsa.dojoMode")
+                    let final = DojoCorrectionTable.shared.correct(polished, dojoMode: dojoMode)
+                    let newlines = final.filter { $0 == "\n" }.count
+                    self.debugLog("polish OK (\(transcript.count) → \(final.count) chars, \(newlines) newlines)")
+                    self.debugLog("polish out: \(String(final.prefix(120)))")
+                    self.finishAndInject(final)
+                case .failure(let err):
+                    // Fall back to the raw transcript, but tell the user polish didn't run —
+                    // silent fallback made key/network failures look like a formatting bug.
+                    self.debugLog("polish FAILED: \(err.localizedDescription) — injecting raw transcript")
+                    self.finishAndInject(transcript)
+                    self.notifyPolishFailure(err.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// HUD line for streaming partials — the label plus the tail of what has
+    /// arrived so far, kept short enough for the single-line status label.
+    private static func streamingPreview(_ partial: String, label: String) -> String {
+        let flat = partial.replacingOccurrences(of: "\n", with: " ")
+        let tail = String(flat.suffix(16))
+        return "\(label)…\(tail)"
+    }
+
+    /// Non-blocking notice when polish/translation quietly degrades (e.g. bad API key).
+    private func notifyPolishFailure(_ reason: String) {
+        let note = NSUserNotification()
+        note.title = "AI 潤飾未生效（已輸出原文）"
+        note.informativeText = reason
+        NSUserNotificationCenter.default.deliver(note)
+    }
+
+    /// Inject the final text and play a subtle confirmation sound.
+    private func finishAndInject(_ text: String) {
+        injectText(text)
+        NSSound(named: "Pop")?.play()   // brief audio cue so user knows text was inserted
+    }
+
+    // MARK: - Manual Text Polish (Option+P or custom shortcut)
+    private func triggerManualPolish() {
+        guard let element = focusedElement() else { return }
+        var selVal: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selVal) == .success,
+              let text = selVal as? String, !text.isEmpty else { return }
+
+        GeminiPolishService.shared.polish(selectedText: text, mode: .standard) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                switch result {
+                case .success(let enhanced):
+                    self.polishPreview.startPreview(original: text, enhanced: enhanced)
+                    self.showPolishHUD(enhanced)
+                case .failure(let err):
+                    self.showError("潤飾失敗：\(err.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    // MARK: - Polish Preview HUD
+    /// Build the floating panel once via lazy initializer.
+    private func makePolishHUD() -> NSPanel {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 80),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: true
+        )
+        panel.backgroundColor = NSColor(red: 0.980, green: 0.980, blue: 0.973, alpha: 1.0)
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.level = .popUpMenu
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.contentView?.wantsLayer = true
+        panel.contentView?.layer?.cornerRadius = 8
+        panel.contentView?.layer?.borderWidth = 1
+        panel.contentView?.layer?.borderColor = NSColor(white: 0.86, alpha: 1).cgColor
+
+        let label = NSTextField(wrappingLabelWithString: "")
+        label.font = NSFont.systemFont(ofSize: 12)
+        label.frame = NSRect(x: 12, y: 34, width: 356, height: 38)
+        panel.contentView?.addSubview(label)
+        polishHUDLabel = label
+
+        let hint = NSTextField(labelWithString: "↩ 接受  ⎋ 拒絕")
+        hint.font = NSFont.systemFont(ofSize: 10)
+        hint.textColor = .secondaryLabelColor
+        hint.frame = NSRect(x: 12, y: 10, width: 200, height: 20)
+        panel.contentView?.addSubview(hint)
+        return panel
+    }
+
+    /// Show preview HUD after the voice pipeline completes.
+    /// Uses the saved recordingTargetElement rect for accurate positioning.
+    private func showPolishPreview(_ text: String) {
+        polishPreview.startPreview(original: text, enhanced: text)
+        polishHUDLabel?.stringValue = text
+        let cursor = recordingTargetElement.flatMap { getCursorRectFor($0) } ?? getCursorRect()
+        polishHUD.setFrameOrigin(floatingOrigin(size: polishHUD.frame.size, below: cursor, screen: NSScreen.main))
+        polishHUD.orderFront(nil)
+    }
+
+    /// Show preview HUD for manual polish (no saved element).
+    private func showPolishHUD(_ text: String) {
+        polishHUDLabel?.stringValue = text
+        polishHUD.setFrameOrigin(floatingOrigin(size: polishHUD.frame.size, below: getCursorRect(), screen: NSScreen.main))
+        polishHUD.orderFront(nil)
+    }
+
+    private func handlePolishPreviewKey(keyCode: Int) -> Bool {
+        if keyCode == kVKReturn || keyCode == kVKTab { polishPreview.accept(); return true }
+        if keyCode == kVKEscape                      { polishPreview.reject(); return true }
+        return false
+    }
+
+    // MARK: - Text Injection via AXUIElement
+    private func injectText(_ text: String) {
+        // Inject via clipboard + Cmd+V — the only reliably cross-app insertion method.
+        // AXUIElementSetAttributeValue(kAXSelectedText:) returns .success on many apps
+        // (Safari address bar, Electron, some native fields) WITHOUT actually inserting
+        // the text, so it can never be trusted as a primary path and is not used here.
+        // TODO(P2): back up the previous clipboard contents and restore them after pasting
+        //           (needs a short delay so Cmd+V reads the value before it is restored).
+        recordingTargetElement = nil
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        pasteViaCmdV()
+        NSLog("[InputSa] injectText: pasted via Cmd+V (\(text.count) chars)")
+    }
+
+    /// Simulate Cmd+V to paste from clipboard. Text must already be in NSPasteboard before calling.
+    /// Clipboard is intentionally left intact so the user can re-paste manually if needed.
+    private func pasteViaCmdV() {
+        let src   = CGEventSource(stateID: .combinedSessionState)
+        let vDown = CGEvent(keyboardEventSource: src, virtualKey: 0x09, keyDown: true)!
+        let vUp   = CGEvent(keyboardEventSource: src, virtualKey: 0x09, keyDown: false)!
+        vDown.flags = .maskCommand
+        vUp.flags   = .maskCommand
+        vDown.post(tap: .cgAnnotatedSessionEventTap)
+        vUp.post(tap: .cgAnnotatedSessionEventTap)
+        NSLog("[InputSa] injectText: Cmd+V dispatched")
+    }
+
+    /// Legacy entry point for callers that don't pre-load the clipboard.
+    private func pasteText(_ text: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        pasteViaCmdV()
+    }
+
+    // MARK: - Cursor Position
+    private func getCursorRect() -> NSRect {
+        guard let element = focusedElement() else { return fallbackCursorRect() }
+        return getCursorRectFor(element) ?? fallbackCursorRect()
+    }
+
+    private func getCursorRectFor(_ element: AXUIElement) -> NSRect? {
+        var rangeVal: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeVal) == .success,
+              let range = rangeVal else { return nil }
+
+        var boundsVal: AnyObject?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            element, kAXBoundsForRangeParameterizedAttribute as CFString, range, &boundsVal
+        ) == .success, let boundsRef = boundsVal else { return nil }
+
+        var rect = CGRect.zero
+        guard AXValueGetValue(boundsRef as! AXValue, .cgRect, &rect) else { return nil }
+
+        let screenH = NSScreen.screens.first?.frame.height ?? 900
+        return NSRect(x: rect.origin.x, y: screenH - rect.origin.y - rect.size.height,
+                      width: rect.size.width, height: rect.size.height)
+    }
+
+    private func fallbackCursorRect() -> NSRect {
+        let m = NSEvent.mouseLocation
+        return NSRect(x: m.x, y: m.y - 20, width: 1, height: 20)
+    }
+
+    // MARK: - Error Presentation
+    private func showError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Input-sa 錯誤"
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+}
+
+// MARK: - Shared diagnostic logger
+/// Append a diagnostic line to ~/Library/Logs/InputSa.log (unified log has proven
+/// unreliable for post-hoc inspection of this app — a plain file survives and is
+/// greppable). Local file only; traces the transcription → correction → polish
+/// pipeline so accuracy issues can be diagnosed from real usage.
+func inputSaLog(_ msg: String) {
+    NSLog("[InputSa] %@", msg)
+    let url = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/InputSa.log")
+    let line = "\(ISO8601DateFormatter().string(from: Date())) \(msg)\n"
+    guard let data = line.data(using: .utf8) else { return }
+    if let h = try? FileHandle(forWritingTo: url) {
+        defer { try? h.close() }
+        h.seekToEndOfFile()
+        h.write(data)
+    } else {
+        try? data.write(to: url)
+    }
+}

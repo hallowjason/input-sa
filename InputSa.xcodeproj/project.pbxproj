@@ -1,0 +1,464 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AA000001 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100001 /* main.swift */; };
+		AA000002 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100002 /* AppDelegate.swift */; };
+		AA000003 /* KeyMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100003 /* KeyMapping.swift */; };
+		AA000004 /* BopomofoEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100004 /* BopomofoEngine.swift */; };
+		AA000005 /* CandidateWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100005 /* CandidateWindowController.swift */; };
+		AA000006 /* InputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100006 /* InputController.swift */; };
+		AA000007 /* LanguageDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100007 /* LanguageDetector.swift */; };
+		AA000008 /* UserStyleModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100008 /* UserStyleModel.swift */; };
+		AA000009 /* UserDictionaryEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100009 /* UserDictionaryEntry.swift */; };
+		AA000010 /* UserDictionary.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100010 /* UserDictionary.swift */; };
+		AA000011 /* TranscriptionMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100011 /* TranscriptionMode.swift */; };
+		AA000012 /* APIKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100012 /* APIKeyStore.swift */; };
+		AA000013 /* GroqVoiceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100013 /* GroqVoiceService.swift */; };
+		AA000014 /* GeminiPolishService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100014 /* GeminiPolishService.swift */; };
+		AA000015 /* PixelGuanyinRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100015 /* PixelGuanyinRenderer.swift */; };
+		AA000016 /* VoiceHUDController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100016 /* VoiceHUDController.swift */; };
+		AA000017 /* PolishPreviewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100017 /* PolishPreviewController.swift */; };
+		AA000018 /* ShortcutRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100018 /* ShortcutRecorderView.swift */; };
+		AA000019 /* PreferencesWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100019 /* PreferencesWindowController.swift */; };
+		AA000020 /* bpmf_chars.db in Resources */ = {isa = PBXBuildFile; fileRef = AA100020 /* bpmf_chars.db */; };
+		AA000021 /* tsi.db in Resources */ = {isa = PBXBuildFile; fileRef = AA100021 /* tsi.db */; };
+		AA000022 /* inputsa-menu.tiff in Resources */ = {isa = PBXBuildFile; fileRef = AA100022 /* inputsa-menu.tiff */; };
+		AA000023 /* VoiceServiceProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100025 /* VoiceServiceProtocol.swift */; };
+		AA000024 /* GoogleVoiceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100026 /* GoogleVoiceService.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		AA100001 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		AA100002 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		AA100003 /* KeyMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyMapping.swift; sourceTree = "<group>"; };
+		AA100004 /* BopomofoEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BopomofoEngine.swift; sourceTree = "<group>"; };
+		AA100005 /* CandidateWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CandidateWindowController.swift; sourceTree = "<group>"; };
+		AA100006 /* InputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputController.swift; sourceTree = "<group>"; };
+		AA100007 /* LanguageDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageDetector.swift; sourceTree = "<group>"; };
+		AA100008 /* UserStyleModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserStyleModel.swift; sourceTree = "<group>"; };
+		AA100009 /* UserDictionaryEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserDictionaryEntry.swift; sourceTree = "<group>"; };
+		AA100010 /* UserDictionary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserDictionary.swift; sourceTree = "<group>"; };
+		AA100011 /* TranscriptionMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionMode.swift; sourceTree = "<group>"; };
+		AA100012 /* APIKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIKeyStore.swift; sourceTree = "<group>"; };
+		AA100013 /* GroqVoiceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroqVoiceService.swift; sourceTree = "<group>"; };
+		AA100014 /* GeminiPolishService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiPolishService.swift; sourceTree = "<group>"; };
+		AA100015 /* PixelGuanyinRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PixelGuanyinRenderer.swift; sourceTree = "<group>"; };
+		AA100016 /* VoiceHUDController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceHUDController.swift; sourceTree = "<group>"; };
+		AA100017 /* PolishPreviewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PolishPreviewController.swift; sourceTree = "<group>"; };
+		AA100018 /* ShortcutRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutRecorderView.swift; sourceTree = "<group>"; };
+		AA100019 /* PreferencesWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindowController.swift; sourceTree = "<group>"; };
+		AA100020 /* bpmf_chars.db */ = {isa = PBXFileReference; lastKnownFileType = file; path = bpmf_chars.db; sourceTree = "<group>"; };
+		AA100021 /* tsi.db */ = {isa = PBXFileReference; lastKnownFileType = file; path = tsi.db; sourceTree = "<group>"; };
+		AA100022 /* inputsa-menu.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = "inputsa-menu.tiff"; sourceTree = "<group>"; };
+		AA100023 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AA100024 /* InputSa.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = InputSa.entitlements; sourceTree = "<group>"; };
+		AA100025 /* VoiceServiceProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceServiceProtocol.swift; sourceTree = "<group>"; };
+		AA100026 /* GoogleVoiceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleVoiceService.swift; sourceTree = "<group>"; };
+		AAPROD001 /* Input-sa.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Input-sa.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		AAPHASE03 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		AAGROUP00 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AAPROD001 /* Input-sa.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		AAGROUP01 /* InputSa */ = {
+			isa = PBXGroup;
+			children = (
+				AAGROUP02 /* App */,
+				AAGROUP03 /* InputMethod */,
+				AAGROUP04 /* AutoDetect */,
+				AAGROUP05 /* Learning */,
+				AAGROUP06 /* UserDictionary */,
+				AAGROUP07 /* AIServices */,
+				AAGROUP08 /* UI */,
+				AAGROUP09 /* Preferences */,
+				AAGROUP10 /* Resources */,
+			);
+			path = InputSa;
+			sourceTree = "<group>";
+		};
+		AAGROUP02 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				AA100001 /* main.swift */,
+				AA100002 /* AppDelegate.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		AAGROUP03 /* InputMethod */ = {
+			isa = PBXGroup;
+			children = (
+				AA100003 /* KeyMapping.swift */,
+				AA100004 /* BopomofoEngine.swift */,
+				AA100005 /* CandidateWindowController.swift */,
+				AA100006 /* InputController.swift */,
+			);
+			path = InputMethod;
+			sourceTree = "<group>";
+		};
+		AAGROUP04 /* AutoDetect */ = {
+			isa = PBXGroup;
+			children = (
+				AA100007 /* LanguageDetector.swift */,
+			);
+			path = AutoDetect;
+			sourceTree = "<group>";
+		};
+		AAGROUP05 /* Learning */ = {
+			isa = PBXGroup;
+			children = (
+				AA100008 /* UserStyleModel.swift */,
+			);
+			path = Learning;
+			sourceTree = "<group>";
+		};
+		AAGROUP06 /* UserDictionary */ = {
+			isa = PBXGroup;
+			children = (
+				AA100009 /* UserDictionaryEntry.swift */,
+				AA100010 /* UserDictionary.swift */,
+			);
+			path = UserDictionary;
+			sourceTree = "<group>";
+		};
+		AAGROUP07 /* AIServices */ = {
+			isa = PBXGroup;
+			children = (
+				AA100011 /* TranscriptionMode.swift */,
+				AA100025 /* VoiceServiceProtocol.swift */,
+				AA100012 /* APIKeyStore.swift */,
+				AA100013 /* GroqVoiceService.swift */,
+				AA100026 /* GoogleVoiceService.swift */,
+				AA100014 /* GeminiPolishService.swift */,
+			);
+			path = AIServices;
+			sourceTree = "<group>";
+		};
+		AAGROUP08 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				AA100015 /* PixelGuanyinRenderer.swift */,
+				AA100016 /* VoiceHUDController.swift */,
+				AA100017 /* PolishPreviewController.swift */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		AAGROUP09 /* Preferences */ = {
+			isa = PBXGroup;
+			children = (
+				AA100018 /* ShortcutRecorderView.swift */,
+				AA100019 /* PreferencesWindowController.swift */,
+			);
+			path = Preferences;
+			sourceTree = "<group>";
+		};
+		AAGROUP10 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				AA100023 /* Info.plist */,
+				AA100024 /* InputSa.entitlements */,
+				AA100020 /* bpmf_chars.db */,
+				AA100021 /* tsi.db */,
+				AA100022 /* inputsa-menu.tiff */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		AAROOOT0 /* root */ = {
+			isa = PBXGroup;
+			children = (
+				AAGROUP01 /* InputSa */,
+				AAGROUP00 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AATARGET /* InputSa */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AACFGLIST2 /* Build configuration list for PBXNativeTarget "InputSa" */;
+			buildPhases = (
+				AAPHASE01 /* Sources */,
+				AAPHASE02 /* Resources */,
+				AAPHASE03 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = InputSa;
+			productName = "Input-sa";
+			productReference = AAPROD001 /* Input-sa.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AAPROJECT /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+			};
+			buildConfigurationList = AACFGLIST1 /* Build configuration list for PBXProject "InputSa" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = zh-Hant;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				"zh-Hant",
+				Base,
+			);
+			mainGroup = AAROOOT0;
+			productRefGroup = AAGROUP00 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AATARGET /* InputSa */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AAPHASE02 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA000020 /* bpmf_chars.db in Resources */,
+				AA000021 /* tsi.db in Resources */,
+				AA000022 /* inputsa-menu.tiff in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AAPHASE01 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA000001 /* main.swift in Sources */,
+				AA000002 /* AppDelegate.swift in Sources */,
+				AA000003 /* KeyMapping.swift in Sources */,
+				AA000004 /* BopomofoEngine.swift in Sources */,
+				AA000005 /* CandidateWindowController.swift in Sources */,
+				AA000006 /* InputController.swift in Sources */,
+				AA000007 /* LanguageDetector.swift in Sources */,
+				AA000008 /* UserStyleModel.swift in Sources */,
+				AA000009 /* UserDictionaryEntry.swift in Sources */,
+				AA000010 /* UserDictionary.swift in Sources */,
+				AA000011 /* TranscriptionMode.swift in Sources */,
+				AA000012 /* APIKeyStore.swift in Sources */,
+				AA000013 /* GroqVoiceService.swift in Sources */,
+				AA000023 /* VoiceServiceProtocol.swift in Sources */,
+				AA000024 /* GoogleVoiceService.swift in Sources */,
+				AA000014 /* GeminiPolishService.swift in Sources */,
+				AA000015 /* PixelGuanyinRenderer.swift in Sources */,
+				AA000016 /* VoiceHUDController.swift in Sources */,
+				AA000017 /* PolishPreviewController.swift in Sources */,
+				AA000018 /* ShortcutRecorderView.swift in Sources */,
+				AA000019 /* PreferencesWindowController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		AACFG0001 /* Debug - Project */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		AACFG0002 /* Release - Project */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		AACFG0003 /* Debug - Target */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = InputSa/Resources/InputSa.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = "";
+				INFOPLIST_FILE = InputSa/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					InputMethodKit,
+					"-framework",
+					AppKit,
+					"-framework",
+					Carbon,
+					"-framework",
+					AVFoundation,
+					"-framework",
+					Security,
+					"-lsqlite3",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.inputsa.inputmethod;
+				PRODUCT_NAME = "Input-sa";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				WRAPPER_EXTENSION = app;
+			};
+			name = Debug;
+		};
+		AACFG0004 /* Release - Target */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = InputSa/Resources/InputSa.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = "";
+				INFOPLIST_FILE = InputSa/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					InputMethodKit,
+					"-framework",
+					AppKit,
+					"-framework",
+					Carbon,
+					"-framework",
+					AVFoundation,
+					"-framework",
+					Security,
+					"-lsqlite3",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.inputsa.inputmethod;
+				PRODUCT_NAME = "Input-sa";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				WRAPPER_EXTENSION = app;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AACFGLIST1 /* Build configuration list for PBXProject "InputSa" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AACFG0001 /* Debug */,
+				AACFG0002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AACFGLIST2 /* Build configuration list for PBXNativeTarget "InputSa" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AACFG0003 /* Debug */,
+				AACFG0004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = AAPROJECT /* Project object */;
+}
