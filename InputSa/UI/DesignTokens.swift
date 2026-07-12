@@ -117,20 +117,28 @@ enum DesignTokens {
     /// A solid-fill pill button — replaces the system `.rounded` bezel look for
     /// primary actions ("儲存設定"). `NSButton` with `isBordered = false` draws
     /// no chrome of its own, so the gold fill + rounding is applied via layer.
-    static func makeSolidButton(title: String, target: AnyObject?, action: Selector) -> NSButton {
+    static func makeSolidButton(title: String, target: AnyObject?, action: Selector,
+                                fill: NSColor = accentGold,
+                                textColor: NSColor = .black) -> NSButton {
         let btn = NSButton(title: title, target: target, action: action)
         btn.isBordered = false
         btn.wantsLayer = true
-        btn.layer?.backgroundColor = accentGold.cgColor
+        btn.layer?.backgroundColor = fill.cgColor
         btn.layer?.cornerRadius = 17
-        btn.attributedTitle = NSAttributedString(string: title, attributes: [
-            .font: monoFont(12, weight: .bold),
-            .foregroundColor: NSColor.black,
-        ])
+        btn.attributedTitle = solidButtonTitle(title, textColor: textColor)
         btn.translatesAutoresizingMaskIntoConstraints = false
         btn.heightAnchor.constraint(equalToConstant: 34).isActive = true
         btn.widthAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
         return btn
+    }
+
+    /// Re-title a solid button without losing its pill styling (plain `title =`
+    /// resets the attributed string and drops the custom font/color).
+    static func solidButtonTitle(_ title: String, textColor: NSColor) -> NSAttributedString {
+        NSAttributedString(string: title, attributes: [
+            .font: monoFont(12, weight: .bold),
+            .foregroundColor: textColor,
+        ])
     }
 
     /// A titled, flat-bordered section card — the container used to visually

@@ -61,4 +61,13 @@ final class UserStyleModel {
     func removeCustomPrompt(id: String) {
         customPrompts = customPrompts.filter { $0.id != id }
     }
+
+    /// In-place replace by id, preserving list order (remove+add would push an
+    /// edited mode to the bottom of the list every time).
+    func updateCustomPrompt(_ prompt: CustomPrompt) {
+        var prompts = customPrompts
+        guard let idx = prompts.firstIndex(where: { $0.id == prompt.id }) else { return }
+        prompts[idx] = prompt
+        customPrompts = prompts
+    }
 }

@@ -2,7 +2,8 @@ import AppKit
 
 /// Preferences window with four tabs:
 /// 1. API Keys  2. Voice & Shortcuts  3. Custom AI Modes  4. Dojo Vocabulary
-final class PreferencesWindowController: NSWindowController, NSWindowDelegate, NSTabViewDelegate {
+final class PreferencesWindowController: NSWindowController, NSWindowDelegate, NSTabViewDelegate,
+                                          NSTextFieldDelegate {
 
     static let shared = PreferencesWindowController()
 
@@ -48,16 +49,19 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
     private var translatePopUp: NSPopUpButton!
     private var shortcutWarningLabel: NSTextField!
     // Custom modes tab
-    private var promptTableView: NSTableView!
+    private var promptCardList: CardListView!
     private var customPrompts: [UserStyleModel.CustomPrompt] = []
     // Dojo vocabulary tab
-    private var dojoTableView: NSTableView!
+    private var dojoCardList: CardListView!
     private var dojoEntries: [DojoCorrectionTable.Entry] = []
     private var dojoModeSwitch: NSSwitch!
+    /// Non-nil while the 🎙 voice-add button is recording.
+    private var voiceAddService: VoiceServiceProtocol?
+    private var voiceAddButton: NSButton!
 
     private init() {
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 620),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -120,7 +124,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         tabView.addTabViewItem(makeDojoTab())
 
         tabView.delegate = self
-        pillTabBar = PillTabBar(labels: ["API Keys", "語音與快捷鍵", "自訂 AI 模式", "道場詞庫"])
+        pillTabBar = PillTabBar(labels: ["語音服務", "快捷鍵", "自訂 AI 模式", "道場詞庫"])
         pillTabBar.onSelect = { [weak self] idx in
             guard let self, idx < self.tabView.tabViewItems.count else { return }
             self.tabView.selectTabViewItem(at: idx)
@@ -150,7 +154,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
 
     private func makeAPIKeysTab() -> NSTabViewItem {
         let item = NSTabViewItem()
-        item.label = "API Keys"
+        item.label = "語音服務"
 
         // ── 目前使用：狀態列（一眼看出主力是哪個服務）─────────
         let statusBadge = DesignTokens.makeSolidBadge(text: "", fill: .systemBlue)
@@ -240,12 +244,12 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         ])
         polishCard.contentStack.addArrangedSubview(geminiGrid)
 
-        // ── Save button ───────────────────────────────────────
-        let saveBtn = DesignTokens.makeSolidButton(
-            title: "儲存設定", target: self, action: #selector(saveAPIKeys))
+        // ── Auto-save (macOS preferences convention: no explicit save button;
+        //    keys are written to Keychain the moment a field ends editing) ──
+        [groqField, googleSttField, geminiField].forEach { $0.delegate = self }
 
         let noteLabel = NSTextField(wrappingLabelWithString:
-            "API Key 安全地儲存在系統 Keychain 中。Gemini 為選填，未設定時跳過 AI 潤飾步驟。")
+            "API Key 修改後自動儲存至系統 Keychain。Gemini 為選填，未設定時跳過 AI 潤飾步驟。")
         noteLabel.font = DesignTokens.monoFont(10)
         noteLabel.textColor = .secondaryLabelColor
 
@@ -261,7 +265,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
             providerStatusBox,
             transcribeCard.box,
             polishCard.box,
-            saveBtn,
             noteLabel,
             NSView(),
         ])
@@ -343,28 +346,52 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         NSWorkspace.shared.open(url)
     }
 
-    @objc private func saveAPIKeys() {
+    /// Persist whatever is currently in the key fields — called on field
+    /// end-editing and as a safety net when the window closes, so an edited
+    /// key can't be silently lost by just closing the window.
+    private func saveAPIKeys() {
+        guard groqField != nil else { return }
         APIKeyStore.shared.groqKey      = groqField.stringValue
         APIKeyStore.shared.geminiKey    = geminiField.stringValue
         APIKeyStore.shared.googleSttKey = googleSttField.stringValue
-        showAlert("設定已儲存", info: "API Key 已安全地寫入 Keychain。")
+    }
+
+    // NSTextFieldDelegate — auto-save keys the moment a field ends editing.
+    func controlTextDidEndEditing(_ obj: Notification) {
+        saveAPIKeys()
     }
 
     // MARK: - Tab 2: Voice & Shortcuts
     private func makeVoiceTab() -> NSTabViewItem {
         let item = NSTabViewItem()
-        item.label = "語音與快捷鍵"
+        item.label = "快捷鍵"
 
-        // ── Default PTT info ─────────────────────────────────
-        // (NSBox custom-type intrinsic-size trap: see DesignTokens.makeCalloutBox.)
-        let defaultCallout = DesignTokens.makeCalloutBox(
-            text: "🎙  長按右 ⌥ 說話 → 轉錄輸出　　🌐  長按右 ⌘ 說中文 → 翻譯輸出",
-            tint: .controlAccentColor)
-        let defaultBox = defaultCallout.box
-        defaultCallout.label.textColor = .labelColor
+        // ── Shortcut overview: key-cap pill + one-line description per row,
+        //    replacing the old seven-line footnote text wall ─────────────
+        let overviewCard = DesignTokens.makeSectionCard(title: "快捷鍵總覽")
+        let shortcutRows: [(key: String, desc: String)] = [
+            ("右 ⌥ 長按", "說話 → 轉錄 → AI 潤飾 → 輸出至游標（未設 Gemini Key 時直接輸出轉錄）"),
+            ("右 ⌘ 長按", "說中文 → 翻譯成目標語言輸出（錄音中按其他組合鍵自動取消）"),
+            ("右 ⇧ 長按", "口頭修正：說「崇正寶宮的崇是崇高的崇…」→ Enter 確認加入道場詞庫"),
+            ("⌥ P",      "選取文字後按 → AI 潤飾預覽（Enter 接受／Esc 取消）"),
+            ("⌃ ⌥ P",    "開啟本偏好設定視窗"),
+        ]
+        for row in shortcutRows {
+            let keyCap = BadgePill(text: row.key, fill: NSColor(calibratedWhite: 0.13, alpha: 1.0),
+                                   textColor: .white, fontSize: 11, height: 24)
+            let descLabel = NSTextField(wrappingLabelWithString: row.desc)
+            descLabel.font = DesignTokens.monoFont(10)
+            descLabel.textColor = .secondaryLabelColor
+            descLabel.preferredMaxLayoutWidth = 320
+            let rowStack = NSStackView(views: [keyCap, descLabel])
+            rowStack.orientation = .horizontal
+            rowStack.spacing = DesignTokens.Spacing.item
+            rowStack.alignment = .centerY
+            overviewCard.contentStack.addArrangedSubview(rowStack)
+        }
 
         // ── Custom shortcut (optional override) ─────────────
-        let shortcutCard = DesignTokens.makeSectionCard(title: "自訂快捷鍵（選填）")
+        let shortcutCard = DesignTokens.makeSectionCard(title: "自訂聽寫快捷鍵（選填）")
 
         voiceRecorder = ShortcutRecorderView(frame: NSRect(x: 0, y: 0, width: 140, height: 28))
         voiceRecorder.setShortcut(PreferencesWindowController.voiceShortcut)
@@ -396,37 +423,31 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         shortcutWarningLabel.isHidden = true
 
         let langLabel = NSTextField(labelWithString: "快捷鍵")
-        let translateLabel = NSTextField(labelWithString: "翻譯目標語言")
-        let characterLabel = NSTextField(labelWithString: "HUD 神佛角色")
-        [langLabel, translateLabel, characterLabel].forEach { $0.font = DesignTokens.monoFont(12) }
+        langLabel.font = DesignTokens.monoFont(12)
 
         let overrideGrid = DesignTokens.makeFieldGrid([
-            [langLabel,       recorderRow],
-            [translateLabel,  makeTranslatePopUp()],
-            [characterLabel,  makeCharacterPopUp()],
+            [langLabel, recorderRow],
         ])
         shortcutCard.contentStack.addArrangedSubview(overrideGrid)
         shortcutCard.contentStack.addArrangedSubview(overrideHint)
         shortcutCard.contentStack.addArrangedSubview(shortcutWarningLabel)
 
-        // ── Usage hint (plain footnote, outside any card) ────
-        let hintLabel = NSTextField(wrappingLabelWithString: """
-            語音輸入流程：錄音結束 → 自動轉錄 → AI 潤飾 → 輸出至游標位置。
-            若 Gemini API Key 未設定，轉錄結果直接輸出（不經潤飾）。
-            語音翻譯（兩種用法擇一）：
-            　• 說話結尾直接講「請幫我翻譯成英文」（日文/泰文…皆可，免記快捷鍵）
-            　• 或長按右 ⌘ 說中文，放開後翻譯成上方目標語言（需 Gemini API Key）。
-            錄音中若按下其他按鍵（右⌘＋C 等組合鍵），翻譯錄音自動取消、組合鍵照常生效。
-            文字潤飾快捷鍵：選取文字後按 Ctrl+Option+P（同偏好設定）。
-            """)
-        hintLabel.font = DesignTokens.monoFont(10)
-        hintLabel.textColor = .secondaryLabelColor
+        // ── Appearance & language (not shortcuts — grouped separately) ──
+        let appearanceCard = DesignTokens.makeSectionCard(title: "外觀與語言")
+        let translateLabel = NSTextField(labelWithString: "翻譯目標語言")
+        let characterLabel = NSTextField(labelWithString: "HUD 神佛角色")
+        [translateLabel, characterLabel].forEach { $0.font = DesignTokens.monoFont(12) }
+        let appearanceGrid = DesignTokens.makeFieldGrid([
+            [translateLabel, makeTranslatePopUp()],
+            [characterLabel, makeCharacterPopUp()],
+        ])
+        appearanceCard.contentStack.addArrangedSubview(appearanceGrid)
 
         // Trailing flex spacer — see the matching comment in makeAPIKeysTab().
         let stack = NSStackView(views: [
-            defaultBox,
+            overviewCard.box,
             shortcutCard.box,
-            hintLabel,
+            appearanceCard.box,
             NSView(),
         ])
         stack.orientation = .vertical
@@ -435,7 +456,9 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         stack.edgeInsets = NSEdgeInsets(
             top: DesignTokens.Spacing.section, left: DesignTokens.Spacing.section,
             bottom: DesignTokens.Spacing.section, right: DesignTokens.Spacing.section)
-        shortcutCard.box.widthAnchor.constraint(equalToConstant: 456).isActive = true
+        [overviewCard.box, shortcutCard.box, appearanceCard.box].forEach {
+            $0.widthAnchor.constraint(equalToConstant: 456).isActive = true
+        }
 
         updateShortcutWarning()
 
@@ -503,103 +526,81 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         let item = NSTabViewItem()
         item.label = "自訂 AI 模式"
 
-        promptTableView = NSTableView()
-        let col1 = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("emoji"))
-        col1.title = "🔖"; col1.width = 30
-        let col2 = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
-        col2.title = "名稱"; col2.width = 100
-        let col3 = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("prompt"))
-        col3.title = "指令"; col3.width = 330
-        promptTableView.addTableColumn(col1)
-        promptTableView.addTableColumn(col2)
-        promptTableView.addTableColumn(col3)
-        promptTableView.dataSource = self
-        promptTableView.delegate = self
-        promptTableView.usesAlternatingRowBackgroundColors = false
-        promptTableView.rowHeight = 26
+        let addBtn = DesignTokens.makeSolidButton(
+            title: "＋ 新增模式", target: self, action: #selector(addCustomPrompt))
+        let headerRow = NSStackView(views: [addBtn, NSView()])
+        headerRow.orientation = .horizontal
 
-        let scroll = NSScrollView()
-        scroll.documentView = promptTableView
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .lineBorder
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            scroll.widthAnchor.constraint(equalToConstant: 428),
-            scroll.heightAnchor.constraint(equalToConstant: 220),
-        ])
-
-        let addBtn = NSButton(title: "+ 新增", target: self, action: #selector(addCustomPrompt))
-        let delBtn = NSButton(title: "刪除選取", target: self, action: #selector(deleteCustomPrompt))
-        addBtn.bezelStyle = .rounded; delBtn.bezelStyle = .rounded
-        addBtn.font = DesignTokens.monoFont(11); delBtn.font = DesignTokens.monoFont(11)
-        let btnBar = NSStackView(views: [addBtn, delBtn, NSView()])
-        btnBar.orientation = .horizontal; btnBar.spacing = DesignTokens.Spacing.compact
+        promptCardList = CardListView(height: 268)
+        promptCardList.emptyStateText = "尚無自訂模式 — 點上方「＋ 新增模式」建立"
+        promptCardList.onEdit = { [weak self] idx in self?.editCustomPrompt(at: idx) }
+        promptCardList.onDelete = { [weak self] idx in self?.deleteCustomPrompt(at: idx) }
 
         customPrompts = UserStyleModel.shared.customPrompts
 
-        let promptsCard = DesignTokens.makeSectionCard(title: "自訂模式清單")
-        [scroll, btnBar].forEach { promptsCard.contentStack.addArrangedSubview($0) }
-
         let hintLabel = NSTextField(wrappingLabelWithString:
-            "語音轉錄完成後，可在此新增自訂 AI 指令模式，供後續輸出時套用。")
+            "在選單列「AI 模式」選定後，聽寫潤飾與選字潤飾（Option+P）都會套用該模式。")
         hintLabel.font = DesignTokens.monoFont(10)
         hintLabel.textColor = .secondaryLabelColor
         hintLabel.preferredMaxLayoutWidth = 456
 
-        let stack = NSStackView(views: [promptsCard.box, hintLabel, NSView()])  // trailing spacer, see makeAPIKeysTab()
+        let stack = NSStackView(views: [headerRow, promptCardList, hintLabel, NSView()])  // trailing spacer, see makeAPIKeysTab()
         stack.orientation = .vertical
         stack.spacing = DesignTokens.Spacing.card
         stack.alignment = .leading
         stack.edgeInsets = NSEdgeInsets(
             top: DesignTokens.Spacing.section, left: DesignTokens.Spacing.section,
             bottom: DesignTokens.Spacing.section, right: DesignTokens.Spacing.section)
-        promptsCard.box.widthAnchor.constraint(equalToConstant: 456).isActive = true
+        [headerRow, promptCardList].forEach {
+            ($0 as NSView).widthAnchor.constraint(equalToConstant: 456).isActive = true
+        }
+
+        reloadPromptCards()
 
         item.view = stack
         return item
     }
 
-    @objc private func addCustomPrompt() {
-        let alert = NSAlert()
-        alert.messageText = "新增自訂模式"
-        alert.addButton(withTitle: "新增")
-        alert.addButton(withTitle: "取消")
-
-        let emojiField  = NSTextField()
-        emojiField.placeholderString = "Emoji（如 📱）"
-        let nameField   = NSTextField()
-        nameField.placeholderString = "模式名稱（如 IG 貼文）"
-        let promptField = NSTextField()
-        promptField.placeholderString = "AI 指令（如：請改寫成 IG 貼文風格...）"
-
-        let stack = NSStackView(views: [emojiField, nameField, promptField])
-        stack.orientation = .vertical
-        stack.spacing = DesignTokens.Spacing.field
-        stack.setFrameSize(NSSize(width: 220, height: stack.fittingSize.height))
-        [emojiField, nameField, promptField].forEach {
-            $0.widthAnchor.constraint(equalToConstant: 220).isActive = true
+    private func reloadPromptCards() {
+        customPrompts = UserStyleModel.shared.customPrompts
+        let rows = customPrompts.map { p -> CardListView.Row in
+            let title = NSAttributedString(string: p.name, attributes: [
+                .font: DesignTokens.monoFont(13, weight: .bold),
+                .foregroundColor: NSColor.labelColor,
+            ])
+            return CardListView.Row(
+                iconText: p.emoji,
+                iconFill: NSColor(calibratedWhite: 0.13, alpha: 1.0),
+                title: title,
+                subtitle: p.prompt,
+                badges: [])
         }
-        alert.accessoryView = stack
+        promptCardList?.reload(rows: rows)
+    }
 
-        if alert.runModal() == .alertFirstButtonReturn {
-            let prompt = UserStyleModel.CustomPrompt(
-                id: UUID().uuidString,
-                name: nameField.stringValue.isEmpty ? "自訂" : nameField.stringValue,
-                emoji: emojiField.stringValue.isEmpty ? "✨" : emojiField.stringValue,
-                prompt: promptField.stringValue
-            )
-            UserStyleModel.shared.addCustomPrompt(prompt)
-            customPrompts = UserStyleModel.shared.customPrompts
-            promptTableView.reloadData()
+    @objc private func addCustomPrompt() {
+        guard let window else { return }
+        PromptEntrySheet.present(on: window, title: "新增自訂模式", initial: nil) { [weak self] entry in
+            guard let entry else { return }
+            UserStyleModel.shared.addCustomPrompt(entry)
+            self?.reloadPromptCards()
         }
     }
 
-    @objc private func deleteCustomPrompt() {
-        let row = promptTableView.selectedRow
-        guard row >= 0, row < customPrompts.count else { return }
-        UserStyleModel.shared.removeCustomPrompt(id: customPrompts[row].id)
-        customPrompts = UserStyleModel.shared.customPrompts
-        promptTableView.reloadData()
+    private func editCustomPrompt(at index: Int) {
+        guard let window, index < customPrompts.count else { return }
+        PromptEntrySheet.present(on: window, title: "編輯自訂模式",
+                                 initial: customPrompts[index]) { [weak self] entry in
+            guard let entry else { return }
+            UserStyleModel.shared.updateCustomPrompt(entry)
+            self?.reloadPromptCards()
+        }
+    }
+
+    private func deleteCustomPrompt(at index: Int) {
+        guard index < customPrompts.count else { return }
+        UserStyleModel.shared.removeCustomPrompt(id: customPrompts[index].id)
+        reloadPromptCards()
     }
 
     // MARK: - Tab 4: Dojo Vocabulary
@@ -612,7 +613,10 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         dojoModeSwitch.target = self
         dojoModeSwitch.action = #selector(dojoModeChanged)
 
-        let dojoModeLabel = NSTextField(labelWithString: "道場模式（套用「限道場模式」規則）")
+        // Short label — the tier explanation lives in the hint below; the full
+        // sentence here pushed the header row past its 456pt width and clipped
+        // the switch off the window's left edge.
+        let dojoModeLabel = NSTextField(labelWithString: "道場模式")
         dojoModeLabel.font = DesignTokens.monoFont(12)
 
         let dojoModeRow = NSStackView(views: [dojoModeSwitch, dojoModeLabel])
@@ -620,153 +624,175 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         dojoModeRow.spacing = DesignTokens.Spacing.compact
         dojoModeRow.alignment = .centerY
 
-        dojoTableView = NSTableView()
-        let colWrong = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("wrong"))
-        colWrong.title = "常見誤辨"; colWrong.width = 140
-        let colCorrect = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("correct"))
-        colCorrect.title = "正確詞"; colCorrect.width = 140
-        let colTier = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("tier"))
-        colTier.title = "分級"; colTier.width = 90
-        let colPhonetic = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("phonetic"))
-        colPhonetic.title = "拼音"; colPhonetic.width = 50
-        dojoTableView.addTableColumn(colWrong)
-        dojoTableView.addTableColumn(colCorrect)
-        dojoTableView.addTableColumn(colTier)
-        dojoTableView.addTableColumn(colPhonetic)
-        dojoTableView.dataSource = self
-        dojoTableView.delegate = self
-        dojoTableView.usesAlternatingRowBackgroundColors = false
-        dojoTableView.rowHeight = 26
-        dojoTableView.target = self
-        dojoTableView.doubleAction = #selector(editDojoEntry)
+        let addBtn = DesignTokens.makeSolidButton(
+            title: "＋ 新增詞條", target: self, action: #selector(addDojoEntry))
+        voiceAddButton = DesignTokens.makeSolidButton(
+            title: "🎙 用說的新增", target: self, action: #selector(toggleVoiceAdd),
+            fill: NSColor(calibratedWhite: 0.13, alpha: 1.0), textColor: .white)
+        let headerRow = NSStackView(views: [dojoModeRow, NSView(), voiceAddButton, addBtn])
+        headerRow.orientation = .horizontal
+        headerRow.alignment = .centerY
+        headerRow.spacing = DesignTokens.Spacing.compact
 
-        let scroll = NSScrollView()
-        scroll.documentView = dojoTableView
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .lineBorder
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            scroll.widthAnchor.constraint(equalToConstant: 428),
-            scroll.heightAnchor.constraint(equalToConstant: 260),
-        ])
-
-        let addBtn = NSButton(title: "+ 新增", target: self, action: #selector(addDojoEntry))
-        let editBtn = NSButton(title: "編輯選取", target: self, action: #selector(editDojoEntry))
-        let delBtn = NSButton(title: "刪除選取", target: self, action: #selector(deleteDojoEntry))
-        addBtn.bezelStyle = .rounded; editBtn.bezelStyle = .rounded; delBtn.bezelStyle = .rounded
-        [addBtn, editBtn, delBtn].forEach { $0.font = DesignTokens.monoFont(11) }
-        let btnBar = NSStackView(views: [addBtn, editBtn, delBtn, NSView()])
-        btnBar.orientation = .horizontal; btnBar.spacing = DesignTokens.Spacing.compact
+        dojoCardList = CardListView(height: 258)
+        dojoCardList.emptyStateText = "尚無詞條 — 點右上「＋ 新增詞條」建立"
+        dojoCardList.onEdit = { [weak self] idx in self?.editDojoEntry(at: idx) }
+        dojoCardList.onDelete = { [weak self] idx in self?.deleteDojoEntry(at: idx) }
 
         dojoEntries = DojoCorrectionTable.shared.allEntries
 
-        let dojoCard = DesignTokens.makeSectionCard(title: "道場詞條")
-        [dojoModeRow, scroll, btnBar].forEach { dojoCard.contentStack.addArrangedSubview($0) }
-
         let hintLabel = NSTextField(wrappingLabelWithString: """
-            語音轉錄常聽錯的道場專有名詞（人名、聖號、術語），在此新增糾正規則。「一律套用」永遠生效；\
-            「限道場模式」只在上方勾選開啟時生效，避免誤糾一般口語（如「半道而廢」）。\
-            拼音糾正會自動比對所有同音變體（如妙吉大帝／妙急大帝皆會糾正為妙極大帝），通常不需關閉。
+            語音轉錄常聽錯的道場專有名詞在此糾正。金色徽章＝永遠生效；灰色徽章＝只在道場模式開啟時生效，\
+            避免誤糾一般口語。「同音」表示所有同音變體都會比對（妙吉／妙急大帝 → 妙極大帝）。
             """)
         hintLabel.font = DesignTokens.monoFont(10)
         hintLabel.textColor = .secondaryLabelColor
         hintLabel.preferredMaxLayoutWidth = 456
 
-        let stack = NSStackView(views: [dojoCard.box, hintLabel, NSView()])  // trailing spacer, see makeAPIKeysTab()
+        let stack = NSStackView(views: [headerRow, dojoCardList, hintLabel, NSView()])  // trailing spacer, see makeAPIKeysTab()
         stack.orientation = .vertical
         stack.spacing = DesignTokens.Spacing.card
         stack.alignment = .leading
         stack.edgeInsets = NSEdgeInsets(
             top: DesignTokens.Spacing.section, left: DesignTokens.Spacing.section,
             bottom: DesignTokens.Spacing.section, right: DesignTokens.Spacing.section)
-        dojoCard.box.widthAnchor.constraint(equalToConstant: 456).isActive = true
+        [headerRow, dojoCardList].forEach {
+            ($0 as NSView).widthAnchor.constraint(equalToConstant: 456).isActive = true
+        }
+
+        reloadDojoCards()
 
         item.view = stack
         return item
+    }
+
+    private func reloadDojoCards() {
+        dojoEntries = DojoCorrectionTable.shared.allEntries
+        let rows = dojoEntries.map { e -> CardListView.Row in
+            let isAlways = e.tier != "dojoOnly"
+            let title = NSMutableAttributedString()
+            if e.wrong != e.correct {
+                title.append(NSAttributedString(string: "\(e.wrong) → ", attributes: [
+                    .font: DesignTokens.monoFont(12),
+                    .foregroundColor: NSColor.secondaryLabelColor,
+                ]))
+            }
+            title.append(NSAttributedString(string: e.correct, attributes: [
+                .font: DesignTokens.monoFont(13, weight: .bold),
+                .foregroundColor: NSColor.labelColor,
+            ]))
+            var badges: [(String, NSColor, NSColor)] = [
+                isAlways ? ("一律套用", DesignTokens.accentGold, NSColor.black)
+                         : ("限道場", NSColor.systemGray, NSColor.white)
+            ]
+            if e.phonetic {
+                badges.append(("同音", NSColor.systemBlue.withAlphaComponent(0.85), NSColor.white))
+            }
+            return CardListView.Row(
+                iconText: String(e.correct.prefix(1)),
+                iconFill: isAlways ? DesignTokens.accentGold : NSColor.systemGray,
+                title: title,
+                subtitle: "",
+                badges: badges.map { (text: $0.0, fill: $0.1, textColor: $0.2) })
+        }
+        dojoCardList?.reload(rows: rows)
     }
 
     @objc private func dojoModeChanged() {
         PreferencesWindowController.dojoMode = (dojoModeSwitch.state == .on)
     }
 
-    /// Shared add/edit modal. `editingIndex == nil` means "add new".
-    private func presentDojoEntryEditor(editingIndex: Int?) {
-        let existing = editingIndex.map { dojoEntries[$0] }
-
-        let alert = NSAlert()
-        alert.messageText = editingIndex == nil ? "新增道場詞條" : "編輯道場詞條"
-        alert.addButton(withTitle: "儲存")
-        alert.addButton(withTitle: "取消")
-
-        let wrongField = NSTextField()
-        wrongField.placeholderString = "常見誤辨（如：妙計大替）"
-        wrongField.stringValue = existing?.wrong ?? ""
-
-        let correctField = NSTextField()
-        correctField.placeholderString = "正確詞（如：妙極大帝）"
-        correctField.stringValue = existing?.correct ?? ""
-
-        let tierPopUp = NSPopUpButton()
-        tierPopUp.addItems(withTitles: ["一律套用", "限道場模式"])
-        tierPopUp.selectItem(at: existing?.tier == "dojoOnly" ? 1 : 0)
-
-        let phoneticCheckbox = NSButton(checkboxWithTitle: "同時套用拼音同音糾正", target: nil, action: nil)
-        phoneticCheckbox.state = (existing?.phonetic ?? true) ? .on : .off
-
-        let stack = NSStackView(views: [wrongField, correctField, tierPopUp, phoneticCheckbox])
-        stack.orientation = .vertical
-        stack.spacing = DesignTokens.Spacing.item
-        [wrongField, correctField, tierPopUp].forEach {
-            $0.widthAnchor.constraint(equalToConstant: 280).isActive = true
-        }
-        alert.accessoryView = stack
-
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        let wrong = wrongField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let correct = correctField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !wrong.isEmpty, !correct.isEmpty else { return }
-
-        let entry = DojoCorrectionTable.Entry(
-            wrong: wrong,
-            correct: correct,
-            tier: tierPopUp.indexOfSelectedItem == 1 ? "dojoOnly" : "always",
-            phonetic: phoneticCheckbox.state == .on
-        )
-
-        var updated = dojoEntries
-        if let idx = editingIndex {
-            updated[idx] = entry
+    // MARK: - 口頭修正 (voice-add from Preferences)
+    /// Same parse pipeline as the global right-Shift PTT, but the result
+    /// prefills the editor sheet for review instead of a HUD Enter/Esc.
+    @objc private func toggleVoiceAdd() {
+        if let service = voiceAddService {
+            // Second click: stop → transcribe → parse → prefill editor.
+            voiceAddService = nil
+            voiceAddButton.isEnabled = false
+            voiceAddButton.attributedTitle = DesignTokens.solidButtonTitle("解析中…", textColor: .white)
+            service.stopAndTranscribe { [weak self] result in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    switch result {
+                    case .failure(let err):
+                        self.resetVoiceAddButton()
+                        self.showAlert("轉錄失敗", info: err.localizedDescription)
+                    case .success(let transcript):
+                        DojoVoiceParser.parse(transcript: transcript) { parseResult in
+                            self.resetVoiceAddButton()
+                            switch parseResult {
+                            case .failure(let err):
+                                self.showAlert("解析失敗", info: err.localizedDescription)
+                            case .success(let entry):
+                                guard let window = self.window else { return }
+                                DojoEntrySheet.present(on: window, title: "確認口頭修正詞條",
+                                                       initial: entry) { [weak self] confirmed in
+                                    guard let self, let confirmed else { return }
+                                    var updated = self.dojoEntries
+                                    updated.append(confirmed)
+                                    self.applyDojoEntries(updated, failureMessage: "儲存失敗")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         } else {
-            updated.append(entry)
+            guard !APIKeyStore.shared.geminiKey.isEmpty else {
+                showAlert("需要 Gemini API Key", info: "口頭修正靠 Gemini 解析你說的釋義，請先在「語音服務」分頁填入。")
+                return
+            }
+            let service: VoiceServiceProtocol
+            switch APIKeyStore.shared.voiceProvider {
+            case .groq:   service = GroqVoiceService()
+            case .google: service = GoogleVoiceService()
+            case .sherpa: service = SherpaVoiceService()
+            }
+            voiceAddService = service
+            service.startRecording()
+            voiceAddButton.attributedTitle = DesignTokens.solidButtonTitle("⏹ 停止並解析", textColor: .white)
         }
-        applyDojoEntries(updated, failureMessage: "儲存失敗")
+    }
+
+    private func resetVoiceAddButton() {
+        voiceAddButton.isEnabled = true
+        voiceAddButton.attributedTitle = DesignTokens.solidButtonTitle("🎙 用說的新增", textColor: .white)
     }
 
     @objc private func addDojoEntry() {
-        presentDojoEntryEditor(editingIndex: nil)
+        guard let window else { return }
+        DojoEntrySheet.present(on: window, title: "新增道場詞條", initial: nil) { [weak self] entry in
+            guard let self, let entry else { return }
+            var updated = self.dojoEntries
+            updated.append(entry)
+            self.applyDojoEntries(updated, failureMessage: "儲存失敗")
+        }
     }
 
-    @objc private func editDojoEntry() {
-        let row = dojoTableView.selectedRow
-        guard row >= 0, row < dojoEntries.count else { return }
-        presentDojoEntryEditor(editingIndex: row)
+    private func editDojoEntry(at index: Int) {
+        guard let window, index < dojoEntries.count else { return }
+        DojoEntrySheet.present(on: window, title: "編輯道場詞條",
+                               initial: dojoEntries[index]) { [weak self] entry in
+            guard let self, let entry else { return }
+            var updated = self.dojoEntries
+            updated[index] = entry
+            self.applyDojoEntries(updated, failureMessage: "儲存失敗")
+        }
     }
 
-    @objc private func deleteDojoEntry() {
-        let row = dojoTableView.selectedRow
-        guard row >= 0, row < dojoEntries.count else { return }
+    private func deleteDojoEntry(at index: Int) {
+        guard index < dojoEntries.count else { return }
         var updated = dojoEntries
-        updated.remove(at: row)
+        updated.remove(at: index)
         applyDojoEntries(updated, failureMessage: "刪除失敗")
     }
 
-    /// Persist `updated` to `DojoCorrectionTable` and refresh the table view.
+    /// Persist `updated` to `DojoCorrectionTable` and refresh the card list.
     /// On write failure, the in-memory table/UI are left untouched and an alert shown.
     private func applyDojoEntries(_ updated: [DojoCorrectionTable.Entry], failureMessage: String) {
         if DojoCorrectionTable.shared.save(updated) {
-            dojoEntries = DojoCorrectionTable.shared.allEntries
-            dojoTableView.reloadData()
+            reloadDojoCards()
         } else {
             showAlert(failureMessage, info: "無法寫入偏好設定檔案，請確認磁碟空間或權限。")
         }
@@ -787,11 +813,9 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         updateProviderStatus()
         voiceRecorder?.setShortcut(PreferencesWindowController.voiceShortcut)
         updateShortcutWarning()
-        customPrompts = UserStyleModel.shared.customPrompts
-        promptTableView?.reloadData()
-        dojoEntries = DojoCorrectionTable.shared.allEntries
+        reloadPromptCards()
         dojoModeSwitch?.state = PreferencesWindowController.dojoMode ? .on : .off
-        dojoTableView?.reloadData()
+        reloadDojoCards()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -806,6 +830,12 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
 
     func windowWillClose(_ notification: Notification) {
         voiceRecorder?.cancelRecordingIfActive()
+        saveAPIKeys()   // safety net: a field still mid-edit hasn't fired end-editing yet
+        if let service = voiceAddService {   // 🎙 voice-add still recording
+            service.cancelRecording()
+            voiceAddService = nil
+            resetVoiceAddButton()
+        }
     }
 
     /// If the window loses key status mid-recording (user clicks another app, Cmd-Tabs
@@ -825,34 +855,5 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
     func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
         guard let item = tabViewItem, let idx = tabView.tabViewItems.firstIndex(of: item) else { return }
         pillTabBar?.select(idx)
-    }
-}
-
-// MARK: - TableView DataSource + Delegate
-extension PreferencesWindowController: NSTableViewDataSource, NSTableViewDelegate {
-    func numberOfRows(in tableView: NSTableView) -> Int {
-        if tableView === dojoTableView { return dojoEntries.count }
-        return customPrompts.count
-    }
-
-    func tableView(_ tableView: NSTableView, objectValueFor col: NSTableColumn?, row: Int) -> Any? {
-        if tableView === dojoTableView {
-            guard row < dojoEntries.count else { return nil }
-            let e = dojoEntries[row]
-            switch col?.identifier.rawValue {
-            case "wrong":    return e.wrong
-            case "correct":  return e.correct
-            case "tier":     return e.tier == "dojoOnly" ? "限道場模式" : "一律套用"
-            case "phonetic": return e.phonetic ? "✓" : ""
-            default:         return nil
-            }
-        }
-        let p = customPrompts[row]
-        switch col?.identifier.rawValue {
-        case "emoji":  return p.emoji
-        case "name":   return p.name
-        case "prompt": return p.prompt
-        default:       return nil
-        }
     }
 }

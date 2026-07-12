@@ -2,11 +2,12 @@ import AppKit
 import ApplicationServices
 import AVFoundation
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     let inputController = InputController()
     private var statusItem: NSStatusItem?
     private var accessibilityPollTimer: Timer?
+    private var aiModeMenu: NSMenu?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
@@ -50,8 +51,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "偏好設定...", action: #selector(openPreferences), keyEquivalent: ",")
             .target = self
         menu.addItem(NSMenuItem.separator())
+
+        // AI 模式 quick pick — the invocation point for custom prompts defined
+        // in Preferences (they had no way to be applied before this submenu).
+        let aiModeItem = NSMenuItem(title: "AI 模式", action: nil, keyEquivalent: "")
+        let submenu = NSMenu(title: "AI 模式")
+        submenu.delegate = self   // repopulated on every open via menuNeedsUpdate
+        aiModeItem.submenu = submenu
+        aiModeMenu = submenu
+        menu.addItem(aiModeItem)
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "語音輸入：長按右 Option 錄音，放開後自動輸出", action: nil, keyEquivalent: "")
-        menu.addItem(withTitle: "語音翻譯：句尾說「請幫我翻譯成英文」，或長按右 Command", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "語音翻譯：長按右 Command 說中文，放開後輸出翻譯", action: nil, keyEquivalent: "")
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "關於 Input-sa", action: #selector(showAbout), keyEquivalent: "")
             .target = self
@@ -59,6 +70,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "結束 Input-sa", action: #selector(quit), keyEquivalent: "q")
             .target = self
         statusItem?.menu = menu
+    }
+
+    // MARK: - AI 模式 submenu
+    /// Rebuilt each time the menu opens so modes added/removed in Preferences
+    /// show up without an app restart.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === aiModeMenu else { return }
+        menu.removeAllItems()
+        let activeID = TranscriptionMode.activeCustomPromptID
+
+        let standardItem = NSMenuItem(title: "📝 標準潤飾", action: #selector(selectAIMode(_:)),
+                                      keyEquivalent: "")
+        standardItem.target = self
+        standardItem.representedObject = nil as String?
+        standardItem.state = activeID == nil ? .on : .off
+        menu.addItem(standardItem)
+
+        let prompts = UserStyleModel.shared.customPrompts
+        if !prompts.isEmpty { menu.addItem(NSMenuItem.separator()) }
+        for prompt in prompts {
+            let item = NSMenuItem(title: "\(prompt.emoji) \(prompt.name)",
+                                  action: #selector(selectAIMode(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = prompt.id
+            item.state = prompt.id == activeID ? .on : .off
+            menu.addItem(item)
+        }
+    }
+
+    @objc private func selectAIMode(_ sender: NSMenuItem) {
+        TranscriptionMode.activeCustomPromptID = sender.representedObject as? String
     }
 
     @objc private func openPreferences() {

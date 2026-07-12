@@ -26,6 +26,11 @@ final class InputController: NSObject {
     /// True when recording is triggered by right-Command translate PTT (中文說話 → 翻譯後注入).
     private var translateKeyRecording = false
     private var translateRecordingStartTime: Date?
+    /// True when recording is triggered by right-Shift 口頭修正 PTT (說出詞條釋義 → 解析 → 入庫).
+    private var correctionKeyRecording = false
+    private var correctionRecordingStartTime: Date?
+    /// Voice-parsed dojo entry awaiting the user's Enter (save) / Esc (discard).
+    private var pendingDojoEntry: DojoCorrectionTable.Entry?
     /// AX element that was focused when recording began — used for injection after API calls complete.
     private var recordingTargetElement: AXUIElement?
     private lazy var polishHUD: NSPanel = makePolishHUD()
@@ -153,8 +158,10 @@ final class InputController: NSObject {
         if type == .flagsChanged {
             let rightOptionKeyCode  = 61   // kVK_RightOption (left Option = 58)
             let rightCommandKeyCode = 54   // kVK_RightCommand (left Command = 55)
+            let rightShiftKeyCode   = 60   // kVK_RightShift (left Shift = 56)
             let optionDown  = flags.contains(.maskAlternate)
             let commandDown = flags.contains(.maskCommand)
+            let shiftDown   = flags.contains(.maskShift)
             let pureOption = optionDown
                 && !flags.contains(.maskCommand)
                 && !flags.contains(.maskControl)
@@ -163,11 +170,16 @@ final class InputController: NSObject {
                 && !flags.contains(.maskAlternate)
                 && !flags.contains(.maskControl)
                 && !flags.contains(.maskShift)
+            let pureShift = shiftDown
+                && !flags.contains(.maskAlternate)
+                && !flags.contains(.maskControl)
+                && !flags.contains(.maskCommand)
 
             // Right-Option transcription PTT (only when no custom shortcut configured)
             if cachedVoiceShortcut == nil {
                 if pureOption && keyCode == rightOptionKeyCode
-                    && !optionKeyRecording && !translateKeyRecording && activeVoiceKeyCode == nil {
+                    && !optionKeyRecording && !translateKeyRecording && !correctionKeyRecording
+                    && activeVoiceKeyCode == nil {
                     optionKeyRecording = true
                     optionRecordingStartTime = Date()
                     handleVoiceKeyDown(keyCode: keyCode)
@@ -188,7 +200,8 @@ final class InputController: NSObject {
             // Right-Command translate PTT: hold → speak Chinese → release → inject translation.
             // A keyDown while holding (e.g. right-Cmd+C combo) cancels the recording — see below.
             if pureCommand && keyCode == rightCommandKeyCode
-                && !translateKeyRecording && !optionKeyRecording && activeVoiceKeyCode == nil {
+                && !translateKeyRecording && !optionKeyRecording && !correctionKeyRecording
+                && activeVoiceKeyCode == nil {
                 translateKeyRecording = true
                 translateRecordingStartTime = Date()
                 handleVoiceKeyDown(keyCode: keyCode)
@@ -203,14 +216,54 @@ final class InputController: NSObject {
                 }
             }
 
+            // Right-Shift 口頭修正 PTT: hold → speak a vocabulary clarification
+            // (「崇正寶宮的崇是崇高的崇…」) → release → parse → Enter to save.
+            // Typing a capital with right-Shift held fires a keyDown, which cancels
+            // the recording below — same combo-cancel contract as right-Command.
+            if pureShift && keyCode == rightShiftKeyCode
+                && !correctionKeyRecording && !translateKeyRecording && !optionKeyRecording
+                && activeVoiceKeyCode == nil {
+                correctionKeyRecording = true
+                correctionRecordingStartTime = Date()
+                handleVoiceKeyDown(keyCode: keyCode)
+            } else if !shiftDown && correctionKeyRecording {
+                let held = correctionRecordingStartTime.map { Date().timeIntervalSince($0) } ?? 1.0
+                if held >= 0.3 {
+                    correctionKeyRecording = false
+                    correctionRecordingStartTime = nil
+                    handleVoiceKeyUp(correction: true)
+                } else {
+                    NSLog("[InputSa] flagsChanged: Shift released too quickly (%.2fs) — debounced", held)
+                }
+            }
+
             return Unmanaged.passRetained(event)
         }
 
-        // ── Cancel translate PTT when the held right-Command turns out to be a combo
-        //    (e.g. right-Cmd+C to copy): discard the recording, let the combo through.
-        if type == .keyDown && translateKeyRecording {
+        // ── Pending 口頭修正 entry: Enter saves, Esc discards, anything else
+        //    dismisses and passes through (no stuck modal state).
+        if type == .keyDown, let entry = pendingDojoEntry {
+            pendingDojoEntry = nil
+            if keyCode == kVKReturn {
+                confirmPendingDojoEntry(entry)
+                return nil
+            }
+            if keyCode == kVKEscape {
+                voiceHUD.hide()
+                return nil
+            }
+            voiceHUD.hide()
+            return Unmanaged.passRetained(event)
+        }
+
+        // ── Cancel translate / correction PTT when the held modifier turns out to
+        //    be a combo (right-Cmd+C, right-Shift+letter): discard the recording,
+        //    let the combo through.
+        if type == .keyDown && (translateKeyRecording || correctionKeyRecording) {
             translateKeyRecording = false
             translateRecordingStartTime = nil
+            correctionKeyRecording = false
+            correctionRecordingStartTime = nil
             activeVoiceKeyCode = nil
             voiceService.cancelRecording()
             voiceHUD.hide()
@@ -284,7 +337,7 @@ final class InputController: NSObject {
         voiceHUD.show(state: .recording, near: getCursorRect(), on: NSScreen.main)
     }
 
-    private func handleVoiceKeyUp(translate: Bool = false) {
+    private func handleVoiceKeyUp(translate: Bool = false, correction: Bool = false) {
         activeVoiceKeyCode = nil
         voiceHUD.setState(.processing("轉錄中…"))
         voiceService.stopAndTranscribe { [weak self] result in
@@ -299,13 +352,60 @@ final class InputController: NSObject {
                     // 2026-07-06: dictated content that legitimately ends with such a
                     // phrase is indistinguishable from a command, so translation is
                     // shortcut-only now (right-⌘, target language set in Preferences).
-                    if translate {
+                    if correction {
+                        self.runDojoVoiceAdd(transcript)
+                    } else if translate {
                         self.runTranslate(transcript)
                     } else {
                         self.runAIPolish(transcript)
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - 口頭修正 (voice-added dojo vocabulary, right-Shift PTT)
+
+    /// Parse the spoken clarification into a dojo entry and park it for the
+    /// user's Enter/Esc. Nothing is written to the vocabulary until confirmed.
+    private func runDojoVoiceAdd(_ transcript: String) {
+        guard !APIKeyStore.shared.geminiKey.isEmpty else {
+            voiceHUD.hide()
+            showError("口頭修正需要 Gemini API Key，請在偏好設定（Ctrl+Option+P）填入。")
+            return
+        }
+        voiceHUD.setState(.processing("解析詞條中…"))
+        DojoVoiceParser.parse(transcript: transcript) { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .failure(let err):
+                self.voiceHUD.hide()
+                self.debugLog("dojo voice-add FAILED: \(err.localizedDescription) (transcript: \(transcript))")
+                self.showError("口頭修正解析失敗：\(err.localizedDescription)")
+            case .success(let entry):
+                self.pendingDojoEntry = entry
+                self.debugLog("dojo voice-add parsed: \(entry.wrong) → \(entry.correct)")
+                let detail = entry.wrong == entry.correct
+                    ? entry.correct
+                    : "\(entry.wrong) → \(entry.correct)"
+                self.voiceHUD.setState(.processing("加入詞庫「\(detail)」？　↩ 確認　⎋ 取消"))
+            }
+        }
+    }
+
+    private func confirmPendingDojoEntry(_ entry: DojoCorrectionTable.Entry) {
+        var entries = DojoCorrectionTable.shared.allEntries
+        let duplicate = entries.contains { $0.wrong == entry.wrong && $0.correct == entry.correct }
+        if !duplicate { entries.append(entry) }
+        if duplicate || DojoCorrectionTable.shared.save(entries) {
+            debugLog("dojo voice-add saved: \(entry.wrong) → \(entry.correct)\(duplicate ? " (duplicate, skipped)" : "")")
+            voiceHUD.setState(.processing("✅ 已加入詞庫：\(entry.correct)"))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                self?.voiceHUD.hide()
+            }
+        } else {
+            voiceHUD.hide()
+            showError("詞庫寫入失敗，請確認磁碟空間或權限。")
         }
     }
 
@@ -354,10 +454,11 @@ final class InputController: NSObject {
             finishAndInject(transcript)
             return
         }
-        voiceHUD.setState(.processing("AI 潤飾中…"))
+        let modeName = TranscriptionMode.activePolishModeName
+        voiceHUD.setState(.processing(modeName.map { "AI 潤飾中（\($0)）…" } ?? "AI 潤飾中…"))
         GeminiPolishService.shared.polish(
             selectedText: transcript,
-            mode: .standard,
+            mode: TranscriptionMode.activePolishMode,
             onPartial: { [weak self] partial in
                 self?.voiceHUD.setState(.processing(Self.streamingPreview(partial, label: "潤飾中")))
             }
@@ -415,7 +516,8 @@ final class InputController: NSObject {
         guard AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selVal) == .success,
               let text = selVal as? String, !text.isEmpty else { return }
 
-        GeminiPolishService.shared.polish(selectedText: text, mode: .standard) { [weak self] result in
+        GeminiPolishService.shared.polish(selectedText: text,
+                                          mode: TranscriptionMode.activePolishMode) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 switch result {
