@@ -1,9 +1,21 @@
-# Session Context — 最後更新 2026-07-12 13:04
+# Session Context — 最後更新 2026-07-12 14:10
 
 ## 🔵 目前狀態（一句話）
-**已成功開源分發（public repo，朋友已裝機使用）+ HUD 大幅精簡（拿掉五尊各自的粒子特效，改成即時聲波動畫+動態漸層外框）+ 偏好設定從「陽春原生視窗」徹底改成手刻自訂視覺（深色 pill 分頁列/金色膠囊控制項）。全部已 build + 裝機 + 自我截圖驗證過，等使用者親眼看過最終效果回饋滿不滿意。**
+**偏好設定第三輪重做完成（兩個表格真卡片化 + sheet 編輯器 + API Key 自動儲存 + 快捷鍵總覽鍵帽卡）＋ 兩個新功能上線：口頭修正（右 Shift 長按說詞條釋義 → Gemini 解析 → Enter 入庫）與 AI 模式快選（選單列子選單，潤飾管線真正套用 custom prompt）。全部已 build + 裝機 + 8 張離線截圖驗證 + Gemini 真實 API 測解析 + fresh-context verifier 七項全 CONFIRMED。**
 
-**✅ 2026-07-12：本輪所有改動已 commit + push 到 GitHub**（commit `07af34d`，使用者明確授權）。朋友端 `git pull` 可拿到新功能；Release zip 仍是 v2.0.0，若要讓一般朋友拿到需另發新 Release（未做）。
+**⚠️ 本輪（14:10 這批）改動尚未 commit**——等使用者實際體驗滿意後再 commit/push。上午的聲波 HUD/偏好設定第二輪已在 `07af34d` push 過；Release zip 仍是 v2.0.0。
+
+## ✅ 2026-07-12 下午完成（UX 研究 + 第三輪重做 + 兩個新功能）
+
+以 ux-designer 流程做過通盤審查後實作，四個 Phase 全過 verifier：
+1. **CardListView（新檔 InputSa/UI/）**：取代兩個 NSTableView。一列一圓角卡、字首/emoji 圓徽、tier「一律套用（金）/限道場（灰）」與「同音（藍）」實心膠囊徽章、hover 徽章↔編輯/刪除按鈕 alpha 交叉淡化（不用 isHidden 避免 reflow）。空狀態文字內建。
+2. **EditorSheets（新檔 InputSa/Preferences/）**：DojoEntrySheet／PromptEntrySheet 視窗 sheet 取代 NSAlert；AI 指令改多行 NSTextView；道場「常見誤辨」欄改選填（留空＝wrong=correct，只靠同音比對）。自訂 AI 模式終於有「編輯」（UserStyleModel 加 updateCustomPrompt 保序更新）。
+3. **Tab 1「語音服務」**：API Key 自動儲存（NSTextFieldDelegate.controlTextDidEndEditing + windowWillClose 雙保險），移除儲存按鈕與確認彈窗。
+4. **Tab 2「快捷鍵」**：七行文字牆改鍵帽（BadgePill 重用）+一句話說明的總覽卡；刪除「句尾說請幫我翻譯成英文」過時說明（選單列同步修）；翻譯語言+HUD 角色歸「外觀與語言」卡。視窗 560→620 高。
+5. **AI 模式接上真實功能**：選單列「AI 模式」子選單（menuNeedsUpdate 動態重建+勾選），TranscriptionMode.activePolishMode 持久化於 UserDefaults；runAIPolish 與 Option+P 都套用；HUD 顯示「AI 潤飾中（模式名）…」。**順手修掉 .custom prompt 裸拼接的注入漏洞**（現在有 <transcript> 隔離+道場詞彙表）。
+6. **口頭修正（右 Shift 長按，新功能）**：說「崇正寶宮的崇是崇高的崇…」→ 現用 STT 轉錄 → Gemini `.dojoEntryParse` few-shot prompt 解析 → HUD「加入詞庫『…』？↩ 確認 ⎋ 取消」→ save 立即生效。偏好設定道場分頁另有「🎙 用說的新增」鈕走同管線預填 sheet。共用解析器 DojoVoiceParser（新檔，含 code-fence/前後綴 JSON 防禦）。
+   - **prompt 是用真實 Gemini API 迭代過的**：第一版兩個案例解析錯（保留轉錄錯字、把指認詞串成目標詞），改 few-shot 後三個 held-out 難例全 PASS（測試腳本在 scratchpad，已丟）。
+   - **已知取捨**：右 Shift 打大寫時 HUD 會閃現後被 keyDown 取消（字母照常輸出）——與右⌘組合鍵取消同一契約，verifier 確認非缺陷但提醒使用者知悉。若使用者嫌煩，備案是延遲 300ms 才顯示 HUD。
 
 ---
 
@@ -69,9 +81,11 @@ macOS 語音輸入法（仿 Windows SpeakSlow 聲聲慢）。Swift CGEventTap �
 已開源：https://github.com/hallowjason/input-sa（public，朋友可自行安裝）。
 
 ## 操作方式（現況）
-- **右 Option 按住**：錄音 → 放開 → 轉錄 → Gemini 潤飾（typeless 排版）→ 注入游標處，錄音中 HUD 顯示即時聲波動畫+流動漸層外框，固定在螢幕正中下方
+- **右 Option 按住**：錄音 → 放開 → 轉錄 → Gemini 潤飾（套用選單列選定的 AI 模式）→ 注入游標處，錄音中 HUD 顯示即時聲波動畫+流動漸層外框，固定在螢幕正中下方
 - **右 Command 按住**：錄音 → 翻譯成偏好設定目標語言輸出（英/日/韓/泰/越/印尼六選一）
-- **Ctrl+Option+P**：偏好設定（4 分頁，深色 pill 分頁列驅動）；**Option+P**：選取文字潤飾（彈窗仍跟隨游標位置，跟語音 HUD 定位邏輯不同）
+- **右 Shift 按住**：口頭修正——說詞條釋義（「崇正寶宮的崇是崇高的崇…」）→ Enter 確認加入道場詞庫
+- **選單列 🎙 → AI 模式**：切換潤飾模式（標準/IG 貼文/條列重點/正式書信/自訂），聽寫與 Option+P 都套用
+- **Ctrl+Option+P**：偏好設定（4 分頁：語音服務/快捷鍵/自訂 AI 模式/道場詞庫）；**Option+P**：選取文字潤飾（彈窗仍跟隨游標位置，跟語音 HUD 定位邏輯不同）
 
 ## 程式碼地圖（本輪異動標記）
 ```
@@ -85,7 +99,10 @@ InputSa/AIServices/GoogleVoiceService.swift ← 雲端 STT（含台語）【本�
 InputSa/AIServices/AudioLevelMeter.swift    ← 【新檔】共用音量量測元件
 InputSa/AIServices/GeminiPolishService.swift← 模型 fallback 鏈，SSE 串流
 InputSa/AIServices/TranscriptionMode.swift  ← 潤飾/翻譯 prompt + dojoVocabularySection
-InputSa/AIServices/DojoCorrectionTable.swift← 精確替換 + 拼音同音層；24 詞條（本輪+4）
+InputSa/AIServices/DojoCorrectionTable.swift← 精確替換 + 拼音同音層；24 詞條
+InputSa/AIServices/DojoVoiceParser.swift    ← 【下午新檔】口頭修正共用解析器（Gemini JSON + 防禦解碼）
+InputSa/UI/CardListView.swift               ← 【下午新檔】卡片列表元件（CardRowView/IconCircle/BadgePill）
+InputSa/Preferences/EditorSheets.swift      ← 【下午新檔】DojoEntrySheet/PromptEntrySheet 視窗 sheet 編輯器
 InputSa/UI/VoiceHUDController.swift         ← 【大改】液態玻璃 HUD，五尊統一漂浮動畫（拿掉粒子特效）
                                               + 即時聲波 + 動態漸層外框；floatingOrigin 拆成兩個函式
 InputSa/UI/WaveformView.swift               ← 【新檔】像素風格滾動音量條
@@ -100,15 +117,22 @@ README.md / .gitignore                       ← 【新檔】面向 GitHub 公�
 ```
 
 ## 待辦 / 未決事項
-- **【最優先】本輪所有改動尚未 commit 到 git**——`git status` 有 8 個 modified + 5 個新檔案。使用者確認滿意後才 commit + push（GitHub public repo 才會更新，朋友端才拿得到）
-- **【次優先】使用者尚未親眼確認最終視覺效果**——本輪全部改動都已 build/裝機/自我截圖驗證過排版正確，但「好不好看、滿不滿意」這個主觀判斷還沒收到使用者回饋。下一棒開場如果使用者說「還是不喜歡」，先問清楚具體是哪個元件（分頁列/選擇器/徽章/按鈕/卡片）不對，不要整套重來
-- Preferences Phase 2（上一輪計畫裡明確列為「這次不做」，未來若使用者要）：自訂 AI 模式／道場詞庫兩個表格改成真正的卡片式列表（現在只是拿掉交替灰底+加大行高，底層還是原生 NSTableView 網格）
+- **【最優先】下午這批改動尚未 commit**（卡片化/口頭修正/AI 模式/自動儲存，13 檔 modified + 3 新檔）。使用者實際體驗滿意後才 commit + push；push 後建議發新 Release 讓一般朋友拿到（現在 Release zip 還是 v2.0.0）
+- **【次優先】使用者實測回饋**：①偏好設定四分頁視覺 ②右 Shift 口頭修正真實錄音流程（我只 E2E 測了 Gemini 解析層，錄音→轉錄→解析的全鏈路要真人說話才測得到）③右 Shift 打大寫時 HUD 閃現的取捨能不能接受（不能就改成延遲 300ms 顯示）
+- PreferencesWindowController.swift 856 行，略超 800 行檔案上限——下次動它時考慮把四個 makeXXXTab 拆檔
 - [ ] P1（舊）：refreshShortcutCache migration 根治 modifier-only 殘留 shortcut bug（歷史遺留，本輪未動）
 - [ ] P2（舊）：翻譯模式也注入道場詞彙表（現在只有潤飾有）
 - [ ] P2（舊）：用完還原剪貼簿；靜音 VAD
 - [ ] `assets_dl/` 暫存需使用者手動清（Claude rm 被權限擋）
 
 ## 踩雷點（動手前必看，本輪新增在最上面）
+- **NSTextField 設了 attributed string 後，欄位自己的 lineBreakMode 會被蓋掉**——截尾要 bake 進 attributed string 的 NSParagraphStyle，否則固定高度卡片裡文字折成兩行
+- **NSScrollView 裡放垂直卡片堆疊**：documentView 非 flipped 時內容錨定在底部，要包一層 `isFlipped=true` 的容器；documentView 寬度要 pin 到 clipView 寬度才不會橫向滾動
+- **CALayer 底色不會跟隨深淺色切換**——在 `viewDidChangeEffectiveAppearance` 用 `effectiveAppearance.performAsCurrentDrawingAppearance` 重新解析 NSColor 再設 cgColor（CardRowView 的做法）
+- **標頭列多顆控制項要算總寬**：456pt 的 row 塞 switch+長標籤+兩顆 pill 會把最左元件擠出視窗（label 縮短為「道場模式」解掉）
+- **離線截圖 harness 兩個新雷**：①`cacheDisplay` 不含視窗背景，深色模式會截出白底假象（白字看似消失）——contentView 設 layer 背景 windowBackgroundColor；②不指定 appearance 時跟系統走，「light」截圖可能默默變深色——兩種都要顯式指定
+- **`.custom` TranscriptionMode 曾是裸拼接**（prompt+transcript），任何新 mode 都要帶 <transcript> 隔離規則，別再開洞
+- **Gemini 結構化解析 prompt 一定要 few-shot + 真實 API 迭代**：純規則描述版在「轉錄本身聽錯目標詞」「指認詞 vs 目標字」兩類案例上會錯，範例教會才穩
 - **AppKit 卡片/徽章高度動態撐開的完整解法**：pin 內容到 box 四邊約束 + box 和內容 view 兩邊都設 `.required` vertical hugging + 若外層容器（如 NSTabView）仍會撐開就加裸 `NSView()` 彈簧吸收多餘空間。完整技術細節見全域記憶 `reference_appkit_ui_testing.md`
 - **自訂控制元件跟原生元件混用時，選中狀態可能有兩個真相來源**（如 PillTabBar vs NSTabView）——任何繞過使用者點擊路徑的程式化切換都要另外同步，用 delegate callback 統一
 - **CAGradientLayer 動畫「流動邊框」效果，不要旋轉 layer 的 transform**（會連遮罩形狀一起轉，非正方形面板會對不齊）——只動畫 `endPoint`（conic 類型）繞中心點轉
