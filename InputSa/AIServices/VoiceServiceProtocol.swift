@@ -10,4 +10,7 @@ protocol VoiceServiceProtocol: AnyObject {
     /// Stop recording and discard the audio without transcribing
     /// (e.g. the PTT turned out to be part of a keyboard shortcut combo).
     func cancelRecording()
+    /// Fires ~30 times/sec while recording with a normalized 0...1 mic level,
+    /// for driving the HUD's live waveform. Fires with 0 once recording stops.
+    var onLevelUpdate: ((Float) -> Void)? { get set }
 }

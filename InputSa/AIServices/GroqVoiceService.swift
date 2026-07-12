@@ -11,6 +11,11 @@ final class GroqVoiceService: NSObject, VoiceServiceProtocol {
     private var recordingURL: URL?
     private var recordingStartTime: Date?
     private var micPermissionDenied = false
+    private let levelMeter = AudioLevelMeter()
+    var onLevelUpdate: ((Float) -> Void)? {
+        get { levelMeter.onLevel }
+        set { levelMeter.onLevel = newValue }
+    }
 
     /// Minimum recording duration in seconds.
     /// Whisper frequently hallucinates (outputs random training-data text) on silent
@@ -45,12 +50,14 @@ final class GroqVoiceService: NSObject, VoiceServiceProtocol {
         do {
             audioRecorder = try AVAudioRecorder(url: tmpURL, settings: settings)
             audioRecorder?.record()
+            if let recorder = audioRecorder { levelMeter.start(recorder: recorder) }
         } catch {
             NSLog("[InputSa] Recording failed to start: \(error)")
         }
     }
 
     func cancelRecording() {
+        levelMeter.stop()
         audioRecorder?.stop()
         audioRecorder = nil
         recordingStartTime = nil
@@ -62,6 +69,7 @@ final class GroqVoiceService: NSObject, VoiceServiceProtocol {
     /// Aborts if the recording is shorter than `minimumDurationSeconds` to prevent
     /// Whisper hallucination on silence.
     func stopAndTranscribe(completion: @escaping (Result<String, Error>) -> Void) {
+        levelMeter.stop()
         guard !micPermissionDenied else {
             completion(.failure(Err("麥克風權限未授權。請至「系統設定 › 隱私與安全性 › 麥克風」開啟 Input-sa 存取權限。")))
             return

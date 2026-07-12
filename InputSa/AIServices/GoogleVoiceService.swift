@@ -14,6 +14,11 @@ final class GoogleVoiceService: NSObject, VoiceServiceProtocol {
     private var recordingURL: URL?
     private var recordingStartTime: Date?
     private var micPermissionDenied = false
+    private let levelMeter = AudioLevelMeter()
+    var onLevelUpdate: ((Float) -> Void)? {
+        get { levelMeter.onLevel }
+        set { levelMeter.onLevel = newValue }
+    }
 
     /// Same minimum as GroqVoiceService — prevents hallucinations on silence.
     static let minimumDurationSeconds: TimeInterval = 0.8
@@ -46,12 +51,14 @@ final class GoogleVoiceService: NSObject, VoiceServiceProtocol {
         do {
             audioRecorder = try AVAudioRecorder(url: tmpURL, settings: settings)
             audioRecorder?.record()
+            if let recorder = audioRecorder { levelMeter.start(recorder: recorder) }
         } catch {
             NSLog("[InputSa] Google STT recording failed to start: \(error)")
         }
     }
 
     func cancelRecording() {
+        levelMeter.stop()
         audioRecorder?.stop()
         audioRecorder = nil
         recordingStartTime = nil
@@ -60,6 +67,7 @@ final class GoogleVoiceService: NSObject, VoiceServiceProtocol {
     }
 
     func stopAndTranscribe(completion: @escaping (Result<String, Error>) -> Void) {
+        levelMeter.stop()
         guard !micPermissionDenied else {
             completion(.failure(Err("麥克風權限未授權。請至「系統設定 › 隱私與安全性 › 麥克風」開啟 Input-sa 存取權限。")))
             return

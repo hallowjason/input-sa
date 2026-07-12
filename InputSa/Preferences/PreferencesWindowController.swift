@@ -2,7 +2,7 @@ import AppKit
 
 /// Preferences window with four tabs:
 /// 1. API Keys  2. Voice & Shortcuts  3. Custom AI Modes  4. Dojo Vocabulary
-final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
+final class PreferencesWindowController: NSWindowController, NSWindowDelegate, NSTabViewDelegate {
 
     static let shared = PreferencesWindowController()
 
@@ -33,8 +33,9 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: - UI
     private var tabView: NSTabView!
+    private var pillTabBar: PillTabBar!
     // API Keys tab
-    private var serviceSegment: NSSegmentedControl!
+    private var providerPicker: PillSegmentedControl!
     private var groqSection: NSView!
     private var googleSection: NSView!
     private var groqField: NSTextField!
@@ -52,7 +53,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     // Dojo vocabulary tab
     private var dojoTableView: NSTableView!
     private var dojoEntries: [DojoCorrectionTable.Entry] = []
-    private var dojoModeCheckbox: NSButton!
+    private var dojoModeSwitch: NSSwitch!
 
     private init() {
         let win = NSWindow(
@@ -83,10 +84,17 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         bannerView.imageScaling = .scaleNone
         bannerView.setFrameSize(NSSize(width: 64, height: 64))
 
-        let titleLabel = NSTextField(labelWithString: "Input-sa")
-        titleLabel.font = NSFont.systemFont(ofSize: 16, weight: .medium)
+        let titleLabel = NSTextField(labelWithString: "")
+        titleLabel.isBordered = false
+        titleLabel.isEditable = false
+        titleLabel.drawsBackground = false
+        titleLabel.attributedStringValue = NSAttributedString(string: "INPUT-SA", attributes: [
+            .font: DesignTokens.monoFont(24, weight: .bold),
+            .kern: 2.2,
+            .foregroundColor: NSColor.labelColor,
+        ])
         let subtitleLabel = NSTextField(labelWithString: "語音轉錄 · 文字潤飾 · AI 強化")
-        subtitleLabel.font = NSFont.systemFont(ofSize: 11)
+        subtitleLabel.font = DesignTokens.monoFont(11)
         subtitleLabel.textColor = .secondaryLabelColor
 
         let titleStack = NSStackView(views: [titleLabel, subtitleLabel])
@@ -104,15 +112,30 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         separator.boxType = .separator
 
         tabView = NSTabView()
+        // Native tab chrome is hidden entirely — PillTabBar below drives selection.
+        tabView.tabViewType = .noTabsNoBorder
         tabView.addTabViewItem(makeAPIKeysTab())
         tabView.addTabViewItem(makeVoiceTab())
         tabView.addTabViewItem(makeCustomModesTab())
         tabView.addTabViewItem(makeDojoTab())
 
-        let mainStack = NSStackView(views: [bannerStack, separator, tabView])
+        tabView.delegate = self
+        pillTabBar = PillTabBar(labels: ["API Keys", "語音與快捷鍵", "自訂 AI 模式", "道場詞庫"])
+        pillTabBar.onSelect = { [weak self] idx in
+            guard let self, idx < self.tabView.tabViewItems.count else { return }
+            self.tabView.selectTabViewItem(at: idx)
+        }
+        let tabBarRow = NSStackView(views: [pillTabBar])
+        tabBarRow.edgeInsets = NSEdgeInsets(top: 12, left: 16, bottom: 4, right: 16)
+
+        let mainStack = NSStackView(views: [bannerStack, separator, tabBarRow, tabView])
         mainStack.orientation = .vertical
         mainStack.spacing = 0
 
+        // Flat system background — deliberately not glass. Preferences reads as a
+        // "hardware settings panel," a different register from the HUD's liquid-glass
+        // "living assistant" panel. (DesignTokens.makeGlassPanel is kept for any future
+        // glass surface but is intentionally unused here.)
         contentView.addSubview(mainStack)
         mainStack.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -129,58 +152,37 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         let item = NSTabViewItem()
         item.label = "API Keys"
 
-        // ── Section header helper ─────────────────────────────
-        func sectionHeader(_ title: String) -> NSTextField {
-            let label = NSTextField(labelWithString: title)
-            label.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
-            label.textColor = .secondaryLabelColor
-            return label
-        }
-
         // ── 目前使用：狀態列（一眼看出主力是哪個服務）─────────
-        providerStatusBox = NSBox()
-        providerStatusBox.boxType = .custom
-        providerStatusBox.cornerRadius = 8
-        providerStatusBox.borderWidth = 1
+        let statusBadge = DesignTokens.makeSolidBadge(text: "", fill: .systemBlue)
+        providerStatusBox = statusBadge.box
+        providerStatusLabel = statusBadge.label
 
-        providerStatusLabel = NSTextField(wrappingLabelWithString: "")
-        providerStatusLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        providerStatusLabel.isSelectable = false
-        providerStatusLabel.preferredMaxLayoutWidth = 440
+        // ── Card 1: 語音轉錄服務 ───────────────────────────────
+        let transcribeCard = DesignTokens.makeSectionCard(title: "語音轉錄服務")
 
-        let statusStack = NSStackView(views: [providerStatusLabel])
-        statusStack.orientation = .horizontal
-        statusStack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
-        providerStatusBox.contentView = statusStack
-        // See defaultBox in makeVoiceTab() for why an explicit height (not hugging
-        // priority) is required — NSBox has no intrinsic size to hug to.
-        providerStatusBox.translatesAutoresizingMaskIntoConstraints = false
-        providerStatusBox.heightAnchor.constraint(equalToConstant: 44).isActive = true
-
-        // ── 語音轉錄服務：service selector (segmented control) ─
-        let transcribeHeader = sectionHeader("語音轉錄服務")
-
-        serviceSegment = NSSegmentedControl(
-            labels: ["Groq Whisper", "Google STT（含台語）", "本地 Paraformer"],
-            trackingMode: .selectOne,
-            target: self,
-            action: #selector(serviceProviderChanged)
-        )
+        let initialProviderIdx: Int
         switch APIKeyStore.shared.voiceProvider {
-        case .groq:   serviceSegment.selectedSegment = 0
-        case .google: serviceSegment.selectedSegment = 1
-        case .sherpa: serviceSegment.selectedSegment = 2
+        case .groq:   initialProviderIdx = 0
+        case .google: initialProviderIdx = 1
+        case .sherpa: initialProviderIdx = 2
+        }
+        providerPicker = PillSegmentedControl(
+            labels: ["Groq Whisper", "Google STT（含台語）", "本地 Paraformer"],
+            selectedIndex: initialProviderIdx)
+        providerPicker.onSelect = { [weak self] idx in
+            self?.serviceProviderChanged(idx)
         }
 
         let serviceHint = NSTextField(wrappingLabelWithString:
             "Groq：免費，繁體中文  ·  Google STT：60 分鐘 / 月免費，支援國語 + 台語混合  ·  本地 Paraformer：完全離線、免 API Key、免飛航模式也能用，含道場詞庫糾正。\n" +
             "點選上方切換使用的服務；未選取的服務其 API Key 仍會保留在 Keychain，隨時可切回。")
-        serviceHint.font = NSFont.systemFont(ofSize: 10)
+        serviceHint.font = DesignTokens.monoFont(10)
         serviceHint.textColor = .secondaryLabelColor
-        serviceHint.preferredMaxLayoutWidth = 440
+        serviceHint.preferredMaxLayoutWidth = 420
 
         // ── Groq section ──────────────────────────────────────
         let groqLabel = NSTextField(labelWithString: "Groq API Key")
+        groqLabel.font = DesignTokens.monoFont(12)
         groqField = NSTextField()
         groqField.placeholderString = "gsk_..."
         groqField.stringValue = APIKeyStore.shared.groqKey
@@ -189,19 +191,14 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         let groqLink = makeLinkButton(title: "前往 Groq Console 取得 →",
                                       url: "https://console.groq.com/keys")
 
-        let groqGrid = NSGridView(views: [
+        groqSection = DesignTokens.makeFieldGrid([
             [groqLabel, groqField],
             [NSView(),  groqLink],
         ])
-        groqGrid.rowSpacing = 4
-        groqGrid.columnSpacing = 8
-        groqGrid.column(at: 0).xPlacement = .trailing
-        groqGrid.column(at: 1).width = 280
-
-        groqSection = groqGrid
 
         // ── Google STT section ────────────────────────────────
         let googleLabel = NSTextField(labelWithString: "Google API Key")
+        googleLabel.font = DesignTokens.monoFont(12)
         googleSttField = NSTextField()
         googleSttField.placeholderString = "AIzaSy..."
         googleSttField.stringValue = APIKeyStore.shared.googleSttKey
@@ -211,29 +208,24 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
                                         url: "https://console.cloud.google.com/apis/credentials")
 
         let googleNote = NSTextField(labelWithString: "需啟用 Cloud Speech-to-Text API")
-        googleNote.font = NSFont.systemFont(ofSize: 10)
+        googleNote.font = DesignTokens.monoFont(10)
         googleNote.textColor = .secondaryLabelColor
 
-        let googleGrid = NSGridView(views: [
+        googleSection = DesignTokens.makeFieldGrid([
             [googleLabel, googleSttField],
             [NSView(),    googleLink],
             [NSView(),    googleNote],
         ])
-        googleGrid.rowSpacing = 4
-        googleGrid.columnSpacing = 8
-        googleGrid.column(at: 0).xPlacement = .trailing
-        googleGrid.column(at: 1).width = 280
 
-        googleSection = googleGrid
+        [providerPicker, serviceHint, groqSection, googleSection].forEach {
+            transcribeCard.contentStack.addArrangedSubview($0!)
+        }
 
-        // ── Separator ─────────────────────────────────────────
-        let sep = NSBox()
-        sep.boxType = .separator
-
-        // ── AI 潤飾服務：Gemini ───────────────────────────────
-        let geminiHeader = sectionHeader("AI 潤飾服務")
+        // ── Card 2: AI 潤飾服務 ────────────────────────────────
+        let polishCard = DesignTokens.makeSectionCard(title: "AI 潤飾服務")
 
         let geminiLabel = NSTextField(labelWithString: "Gemini API Key")
+        geminiLabel.font = DesignTokens.monoFont(12)
         geminiField = NSTextField()
         geminiField.placeholderString = "AIzaSy..."
         geminiField.stringValue = APIKeyStore.shared.geminiKey
@@ -242,42 +234,46 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         let geminiLink = makeLinkButton(title: "前往 AI Studio 取得 →",
                                         url: "https://aistudio.google.com/app/apikey")
 
-        let geminiGrid = NSGridView(views: [
+        let geminiGrid = DesignTokens.makeFieldGrid([
             [geminiLabel, geminiField],
             [NSView(),    geminiLink],
         ])
-        geminiGrid.rowSpacing = 4
-        geminiGrid.columnSpacing = 8
-        geminiGrid.column(at: 0).xPlacement = .trailing
-        geminiGrid.column(at: 1).width = 280
+        polishCard.contentStack.addArrangedSubview(geminiGrid)
 
         // ── Save button ───────────────────────────────────────
-        let saveBtn = NSButton(title: "儲存設定", target: self, action: #selector(saveAPIKeys))
-        saveBtn.bezelStyle = .rounded
+        let saveBtn = DesignTokens.makeSolidButton(
+            title: "儲存設定", target: self, action: #selector(saveAPIKeys))
 
         let noteLabel = NSTextField(wrappingLabelWithString:
             "API Key 安全地儲存在系統 Keychain 中。Gemini 為選填，未設定時跳過 AI 潤飾步驟。")
-        noteLabel.font = NSFont.systemFont(ofSize: 10)
+        noteLabel.font = DesignTokens.monoFont(10)
         noteLabel.textColor = .secondaryLabelColor
 
         // ── Assemble ──────────────────────────────────────────
+        // Trailing flex spacer: NSTabView stretches item.view to fill its full content
+        // area, taller than this tab's natural content. A bare NSView has no intrinsic
+        // size (nothing to hug to), so it absorbs 100% of that slack — without it, the
+        // *last card* was the one silently stretched, leaving a hollow gap inside the
+        // card's own border (looked exactly like the "no intrinsic size" NSBox trap,
+        // but was actually this — content-hugging priority on the card couldn't fix it
+        // because a wrapping NSTextField label refuses to be the one to stretch).
         let stack = NSStackView(views: [
             providerStatusBox,
-            transcribeHeader,
-            serviceSegment,
-            serviceHint,
-            groqSection,
-            googleSection,
-            sep,
-            geminiHeader,
-            geminiGrid,
+            transcribeCard.box,
+            polishCard.box,
             saveBtn,
             noteLabel,
+            NSView(),
         ])
         stack.orientation = .vertical
-        stack.spacing = 10
+        stack.spacing = DesignTokens.Spacing.card
         stack.alignment = .leading
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        stack.edgeInsets = NSEdgeInsets(
+            top: DesignTokens.Spacing.section, left: DesignTokens.Spacing.section,
+            bottom: DesignTokens.Spacing.section, right: DesignTokens.Spacing.section)
+        [providerStatusBox, transcribeCard.box, polishCard.box].forEach {
+            $0!.widthAnchor.constraint(equalToConstant: 456).isActive = true
+        }
 
         updateServiceSectionVisibility()
         updateProviderStatus()
@@ -286,9 +282,9 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         return item
     }
 
-    @objc private func serviceProviderChanged() {
+    private func serviceProviderChanged(_ selectedIndex: Int) {
         let provider: APIKeyStore.VoiceProvider
-        switch serviceSegment.selectedSegment {
+        switch selectedIndex {
         case 1:  provider = .google
         case 2:  provider = .sherpa
         default: provider = .groq
@@ -312,9 +308,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
             (icon, text, tint) = ("🌐", "目前使用：Google STT（雲端）— 需要網路連線", .systemBlue)
         }
         providerStatusLabel.stringValue = "\(icon)  \(text)"
-        providerStatusLabel.textColor = tint
-        providerStatusBox.fillColor = tint.withAlphaComponent(0.08)
-        providerStatusBox.borderColor = tint.withAlphaComponent(0.3)
+        providerStatusBox.fillColor = tint
     }
 
     private func updateServiceSectionVisibility() {
@@ -336,7 +330,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         let btn = NSButton(title: title, target: self, action: #selector(openLink(_:)))
         btn.bezelStyle = .inline
         btn.isBordered = false
-        btn.font = NSFont.systemFont(ofSize: 11)
+        btn.font = DesignTokens.monoFont(11)
         btn.contentTintColor = NSColor.linkColor
         btn.toolTip = url
         btn.identifier = NSUserInterfaceItemIdentifier(url)
@@ -362,32 +356,15 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         item.label = "語音與快捷鍵"
 
         // ── Default PTT info ─────────────────────────────────
-        let defaultBox = NSBox()
-        defaultBox.boxType = .custom
-        defaultBox.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.08)
-        defaultBox.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.3)
-        defaultBox.cornerRadius = 8
-        defaultBox.borderWidth = 1
-
-        let defaultLabel = NSTextField(labelWithString: "🎙  長按右 ⌥ 說話 → 轉錄輸出　　🌐  長按右 ⌘ 說中文 → 翻譯輸出")
-        defaultLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        defaultLabel.isSelectable = false
-
-        let defaultStack = NSStackView(views: [defaultLabel])
-        defaultStack.orientation = .horizontal
-        defaultStack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
-        defaultBox.contentView = defaultStack
-        // NSBox (boxType: .custom) has NO intrinsic content size at all — not "low
-        // priority", genuinely undefined. Content-hugging priority has nothing to hug to,
-        // so in a vertical NSStackView with slack space it stretches arbitrarily (label
-        // ends up pinned near the bottom of a tall empty box). Needs an explicit height.
-        defaultBox.translatesAutoresizingMaskIntoConstraints = false
-        defaultBox.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        // (NSBox custom-type intrinsic-size trap: see DesignTokens.makeCalloutBox.)
+        let defaultCallout = DesignTokens.makeCalloutBox(
+            text: "🎙  長按右 ⌥ 說話 → 轉錄輸出　　🌐  長按右 ⌘ 說中文 → 翻譯輸出",
+            tint: .controlAccentColor)
+        let defaultBox = defaultCallout.box
+        defaultCallout.label.textColor = .labelColor
 
         // ── Custom shortcut (optional override) ─────────────
-        let overrideHeader = NSTextField(labelWithString: "自訂快捷鍵（選填）")
-        overrideHeader.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
-        overrideHeader.textColor = .secondaryLabelColor
+        let shortcutCard = DesignTokens.makeSectionCard(title: "自訂快捷鍵（選填）")
 
         voiceRecorder = ShortcutRecorderView(frame: NSRect(x: 0, y: 0, width: 140, height: 28))
         voiceRecorder.setShortcut(PreferencesWindowController.voiceShortcut)
@@ -407,29 +384,32 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
         let overrideHint = NSTextField(wrappingLabelWithString:
             "設定後將取代右 Option 長按。點擊框格錄製新快捷鍵（含無修飾鍵的單鍵）；按 ⎋ 取消錄製。點「清除」恢復右 Option 長按預設。")
-        overrideHint.font = NSFont.systemFont(ofSize: 10)
+        overrideHint.font = DesignTokens.monoFont(10)
         overrideHint.textColor = .secondaryLabelColor
 
         // Only visible when the saved shortcut has zero modifiers — that key will fire
         // system-wide on every matching keystroke, including normal typing in any app.
         shortcutWarningLabel = NSTextField(wrappingLabelWithString:
             "⚠️ 這是不含修飾鍵的單一按鍵，日常打字打到這個鍵時也會觸發語音錄音，請確認這是你要的。")
-        shortcutWarningLabel.font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        shortcutWarningLabel.font = DesignTokens.monoFont(10, weight: .medium)
         shortcutWarningLabel.textColor = .systemOrange
         shortcutWarningLabel.isHidden = true
 
-        let overrideGrid = NSGridView(views: [
-            [NSTextField(labelWithString: "快捷鍵"),       recorderRow],
-            [NSTextField(labelWithString: "翻譯目標語言"), makeTranslatePopUp()],
-            [NSTextField(labelWithString: "HUD 神佛角色"), makeCharacterPopUp()],
+        let langLabel = NSTextField(labelWithString: "快捷鍵")
+        let translateLabel = NSTextField(labelWithString: "翻譯目標語言")
+        let characterLabel = NSTextField(labelWithString: "HUD 神佛角色")
+        [langLabel, translateLabel, characterLabel].forEach { $0.font = DesignTokens.monoFont(12) }
+
+        let overrideGrid = DesignTokens.makeFieldGrid([
+            [langLabel,       recorderRow],
+            [translateLabel,  makeTranslatePopUp()],
+            [characterLabel,  makeCharacterPopUp()],
         ])
-        overrideGrid.rowSpacing = 8
-        overrideGrid.columnSpacing = 8
-        overrideGrid.column(at: 0).xPlacement = .trailing
+        shortcutCard.contentStack.addArrangedSubview(overrideGrid)
+        shortcutCard.contentStack.addArrangedSubview(overrideHint)
+        shortcutCard.contentStack.addArrangedSubview(shortcutWarningLabel)
 
-        // ── Usage hint ───────────────────────────────────────
-        let sep = NSBox(); sep.boxType = .separator
-
+        // ── Usage hint (plain footnote, outside any card) ────
         let hintLabel = NSTextField(wrappingLabelWithString: """
             語音輸入流程：錄音結束 → 自動轉錄 → AI 潤飾 → 輸出至游標位置。
             若 Gemini API Key 未設定，轉錄結果直接輸出（不經潤飾）。
@@ -439,22 +419,23 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
             錄音中若按下其他按鍵（右⌘＋C 等組合鍵），翻譯錄音自動取消、組合鍵照常生效。
             文字潤飾快捷鍵：選取文字後按 Ctrl+Option+P（同偏好設定）。
             """)
-        hintLabel.font = NSFont.systemFont(ofSize: 10)
+        hintLabel.font = DesignTokens.monoFont(10)
         hintLabel.textColor = .secondaryLabelColor
 
+        // Trailing flex spacer — see the matching comment in makeAPIKeysTab().
         let stack = NSStackView(views: [
             defaultBox,
-            overrideHeader,
-            overrideGrid,
-            overrideHint,
-            shortcutWarningLabel,
-            sep,
+            shortcutCard.box,
             hintLabel,
+            NSView(),
         ])
         stack.orientation = .vertical
-        stack.spacing = 10
+        stack.spacing = DesignTokens.Spacing.card
         stack.alignment = .leading
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        stack.edgeInsets = NSEdgeInsets(
+            top: DesignTokens.Spacing.section, left: DesignTokens.Spacing.section,
+            bottom: DesignTokens.Spacing.section, right: DesignTokens.Spacing.section)
+        shortcutCard.box.widthAnchor.constraint(equalToConstant: 456).isActive = true
 
         updateShortcutWarning()
 
@@ -472,11 +453,16 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    /// Common translate targets. Gemini's translate prompt takes this string
+    /// verbatim (see TranscriptionMode.swift) so any language name works —
+    /// this list is just the curated set exposed in the popup.
+    static let translateLanguages = ["英文", "日文", "韓文", "泰文", "越南文", "印尼文"]
+
     private func makeTranslatePopUp() -> NSPopUpButton {
         translatePopUp = NSPopUpButton()
-        translatePopUp.addItems(withTitles: ["英文", "泰文"])
+        translatePopUp.addItems(withTitles: Self.translateLanguages)
         let saved = TranscriptionMode.translateTargetLanguage
-        if let idx = ["英文", "泰文"].firstIndex(of: saved) {
+        if let idx = Self.translateLanguages.firstIndex(of: saved) {
             translatePopUp.selectItem(at: idx)
         }
         translatePopUp.target = self
@@ -529,37 +515,45 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         promptTableView.addTableColumn(col3)
         promptTableView.dataSource = self
         promptTableView.delegate = self
-        promptTableView.usesAlternatingRowBackgroundColors = true
+        promptTableView.usesAlternatingRowBackgroundColors = false
+        promptTableView.rowHeight = 26
 
         let scroll = NSScrollView()
         scroll.documentView = promptTableView
         scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
+        scroll.borderType = .lineBorder
         scroll.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            scroll.widthAnchor.constraint(equalToConstant: 464),
+            scroll.widthAnchor.constraint(equalToConstant: 428),
             scroll.heightAnchor.constraint(equalToConstant: 220),
         ])
 
         let addBtn = NSButton(title: "+ 新增", target: self, action: #selector(addCustomPrompt))
         let delBtn = NSButton(title: "刪除選取", target: self, action: #selector(deleteCustomPrompt))
         addBtn.bezelStyle = .rounded; delBtn.bezelStyle = .rounded
+        addBtn.font = DesignTokens.monoFont(11); delBtn.font = DesignTokens.monoFont(11)
         let btnBar = NSStackView(views: [addBtn, delBtn, NSView()])
-        btnBar.orientation = .horizontal; btnBar.spacing = 6
+        btnBar.orientation = .horizontal; btnBar.spacing = DesignTokens.Spacing.compact
 
         customPrompts = UserStyleModel.shared.customPrompts
 
+        let promptsCard = DesignTokens.makeSectionCard(title: "自訂模式清單")
+        [scroll, btnBar].forEach { promptsCard.contentStack.addArrangedSubview($0) }
+
         let hintLabel = NSTextField(wrappingLabelWithString:
             "語音轉錄完成後，可在此新增自訂 AI 指令模式，供後續輸出時套用。")
-        hintLabel.font = NSFont.systemFont(ofSize: 10)
+        hintLabel.font = DesignTokens.monoFont(10)
         hintLabel.textColor = .secondaryLabelColor
-        hintLabel.preferredMaxLayoutWidth = 464
+        hintLabel.preferredMaxLayoutWidth = 456
 
-        let stack = NSStackView(views: [scroll, btnBar, hintLabel])
+        let stack = NSStackView(views: [promptsCard.box, hintLabel, NSView()])  // trailing spacer, see makeAPIKeysTab()
         stack.orientation = .vertical
-        stack.spacing = 10
+        stack.spacing = DesignTokens.Spacing.card
         stack.alignment = .leading
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        stack.edgeInsets = NSEdgeInsets(
+            top: DesignTokens.Spacing.section, left: DesignTokens.Spacing.section,
+            bottom: DesignTokens.Spacing.section, right: DesignTokens.Spacing.section)
+        promptsCard.box.widthAnchor.constraint(equalToConstant: 456).isActive = true
 
         item.view = stack
         return item
@@ -571,18 +565,21 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         alert.addButton(withTitle: "新增")
         alert.addButton(withTitle: "取消")
 
-        let emojiField  = NSTextField(frame: NSRect(x: 0, y: 76, width: 200, height: 22))
+        let emojiField  = NSTextField()
         emojiField.placeholderString = "Emoji（如 📱）"
-        let nameField   = NSTextField(frame: NSRect(x: 0, y: 50, width: 200, height: 22))
+        let nameField   = NSTextField()
         nameField.placeholderString = "模式名稱（如 IG 貼文）"
-        let promptField = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 46))
+        let promptField = NSTextField()
         promptField.placeholderString = "AI 指令（如：請改寫成 IG 貼文風格...）"
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
-        container.addSubview(emojiField)
-        container.addSubview(nameField)
-        container.addSubview(promptField)
-        alert.accessoryView = container
+        let stack = NSStackView(views: [emojiField, nameField, promptField])
+        stack.orientation = .vertical
+        stack.spacing = DesignTokens.Spacing.field
+        stack.setFrameSize(NSSize(width: 220, height: stack.fittingSize.height))
+        [emojiField, nameField, promptField].forEach {
+            $0.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        }
+        alert.accessoryView = stack
 
         if alert.runModal() == .alertFirstButtonReturn {
             let prompt = UserStyleModel.CustomPrompt(
@@ -610,11 +607,18 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         let item = NSTabViewItem()
         item.label = "道場詞庫"
 
-        dojoModeCheckbox = NSButton(
-            checkboxWithTitle: "道場模式（套用「限道場模式」規則）",
-            target: self, action: #selector(dojoModeChanged)
-        )
-        dojoModeCheckbox.state = PreferencesWindowController.dojoMode ? .on : .off
+        dojoModeSwitch = NSSwitch()
+        dojoModeSwitch.state = PreferencesWindowController.dojoMode ? .on : .off
+        dojoModeSwitch.target = self
+        dojoModeSwitch.action = #selector(dojoModeChanged)
+
+        let dojoModeLabel = NSTextField(labelWithString: "道場模式（套用「限道場模式」規則）")
+        dojoModeLabel.font = DesignTokens.monoFont(12)
+
+        let dojoModeRow = NSStackView(views: [dojoModeSwitch, dojoModeLabel])
+        dojoModeRow.orientation = .horizontal
+        dojoModeRow.spacing = DesignTokens.Spacing.compact
+        dojoModeRow.alignment = .centerY
 
         dojoTableView = NSTableView()
         let colWrong = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("wrong"))
@@ -631,17 +635,18 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         dojoTableView.addTableColumn(colPhonetic)
         dojoTableView.dataSource = self
         dojoTableView.delegate = self
-        dojoTableView.usesAlternatingRowBackgroundColors = true
+        dojoTableView.usesAlternatingRowBackgroundColors = false
+        dojoTableView.rowHeight = 26
         dojoTableView.target = self
         dojoTableView.doubleAction = #selector(editDojoEntry)
 
         let scroll = NSScrollView()
         scroll.documentView = dojoTableView
         scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
+        scroll.borderType = .lineBorder
         scroll.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            scroll.widthAnchor.constraint(equalToConstant: 464),
+            scroll.widthAnchor.constraint(equalToConstant: 428),
             scroll.heightAnchor.constraint(equalToConstant: 260),
         ])
 
@@ -649,32 +654,39 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         let editBtn = NSButton(title: "編輯選取", target: self, action: #selector(editDojoEntry))
         let delBtn = NSButton(title: "刪除選取", target: self, action: #selector(deleteDojoEntry))
         addBtn.bezelStyle = .rounded; editBtn.bezelStyle = .rounded; delBtn.bezelStyle = .rounded
+        [addBtn, editBtn, delBtn].forEach { $0.font = DesignTokens.monoFont(11) }
         let btnBar = NSStackView(views: [addBtn, editBtn, delBtn, NSView()])
-        btnBar.orientation = .horizontal; btnBar.spacing = 6
+        btnBar.orientation = .horizontal; btnBar.spacing = DesignTokens.Spacing.compact
 
         dojoEntries = DojoCorrectionTable.shared.allEntries
+
+        let dojoCard = DesignTokens.makeSectionCard(title: "道場詞條")
+        [dojoModeRow, scroll, btnBar].forEach { dojoCard.contentStack.addArrangedSubview($0) }
 
         let hintLabel = NSTextField(wrappingLabelWithString: """
             語音轉錄常聽錯的道場專有名詞（人名、聖號、術語），在此新增糾正規則。「一律套用」永遠生效；\
             「限道場模式」只在上方勾選開啟時生效，避免誤糾一般口語（如「半道而廢」）。\
             拼音糾正會自動比對所有同音變體（如妙吉大帝／妙急大帝皆會糾正為妙極大帝），通常不需關閉。
             """)
-        hintLabel.font = NSFont.systemFont(ofSize: 10)
+        hintLabel.font = DesignTokens.monoFont(10)
         hintLabel.textColor = .secondaryLabelColor
-        hintLabel.preferredMaxLayoutWidth = 464
+        hintLabel.preferredMaxLayoutWidth = 456
 
-        let stack = NSStackView(views: [dojoModeCheckbox, scroll, btnBar, hintLabel])
+        let stack = NSStackView(views: [dojoCard.box, hintLabel, NSView()])  // trailing spacer, see makeAPIKeysTab()
         stack.orientation = .vertical
-        stack.spacing = 10
+        stack.spacing = DesignTokens.Spacing.card
         stack.alignment = .leading
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        stack.edgeInsets = NSEdgeInsets(
+            top: DesignTokens.Spacing.section, left: DesignTokens.Spacing.section,
+            bottom: DesignTokens.Spacing.section, right: DesignTokens.Spacing.section)
+        dojoCard.box.widthAnchor.constraint(equalToConstant: 456).isActive = true
 
         item.view = stack
         return item
     }
 
     @objc private func dojoModeChanged() {
-        PreferencesWindowController.dojoMode = (dojoModeCheckbox.state == .on)
+        PreferencesWindowController.dojoMode = (dojoModeSwitch.state == .on)
     }
 
     /// Shared add/edit modal. `editingIndex == nil` means "add new".
@@ -686,28 +698,28 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         alert.addButton(withTitle: "儲存")
         alert.addButton(withTitle: "取消")
 
-        let wrongField = NSTextField(frame: NSRect(x: 0, y: 112, width: 280, height: 22))
+        let wrongField = NSTextField()
         wrongField.placeholderString = "常見誤辨（如：妙計大替）"
         wrongField.stringValue = existing?.wrong ?? ""
 
-        let correctField = NSTextField(frame: NSRect(x: 0, y: 82, width: 280, height: 22))
+        let correctField = NSTextField()
         correctField.placeholderString = "正確詞（如：妙極大帝）"
         correctField.stringValue = existing?.correct ?? ""
 
-        let tierPopUp = NSPopUpButton(frame: NSRect(x: 0, y: 46, width: 280, height: 26))
+        let tierPopUp = NSPopUpButton()
         tierPopUp.addItems(withTitles: ["一律套用", "限道場模式"])
         tierPopUp.selectItem(at: existing?.tier == "dojoOnly" ? 1 : 0)
 
         let phoneticCheckbox = NSButton(checkboxWithTitle: "同時套用拼音同音糾正", target: nil, action: nil)
-        phoneticCheckbox.frame = NSRect(x: 0, y: 14, width: 280, height: 22)
         phoneticCheckbox.state = (existing?.phonetic ?? true) ? .on : .off
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 142))
-        container.addSubview(wrongField)
-        container.addSubview(correctField)
-        container.addSubview(tierPopUp)
-        container.addSubview(phoneticCheckbox)
-        alert.accessoryView = container
+        let stack = NSStackView(views: [wrongField, correctField, tierPopUp, phoneticCheckbox])
+        stack.orientation = .vertical
+        stack.spacing = DesignTokens.Spacing.item
+        [wrongField, correctField, tierPopUp].forEach {
+            $0.widthAnchor.constraint(equalToConstant: 280).isActive = true
+        }
+        alert.accessoryView = stack
 
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
@@ -767,9 +779,9 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         geminiField?.stringValue    = APIKeyStore.shared.geminiKey
         googleSttField?.stringValue = APIKeyStore.shared.googleSttKey
         switch APIKeyStore.shared.voiceProvider {
-        case .groq:   serviceSegment?.selectedSegment = 0
-        case .google: serviceSegment?.selectedSegment = 1
-        case .sherpa: serviceSegment?.selectedSegment = 2
+        case .groq:   providerPicker?.select(0)
+        case .google: providerPicker?.select(1)
+        case .sherpa: providerPicker?.select(2)
         }
         updateServiceSectionVisibility()
         updateProviderStatus()
@@ -778,7 +790,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         customPrompts = UserStyleModel.shared.customPrompts
         promptTableView?.reloadData()
         dojoEntries = DojoCorrectionTable.shared.allEntries
-        dojoModeCheckbox?.state = PreferencesWindowController.dojoMode ? .on : .off
+        dojoModeSwitch?.state = PreferencesWindowController.dojoMode ? .on : .off
         dojoTableView?.reloadData()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -802,6 +814,17 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     /// user to notice, since the window that would show "按下快捷鍵..." isn't even visible.
     func windowDidResignKey(_ notification: Notification) {
         voiceRecorder?.cancelRecordingIfActive()
+    }
+
+    // MARK: - NSTabViewDelegate
+    /// Keeps PillTabBar's highlighted segment in sync regardless of *how* the
+    /// tab changed — PillTabBar and NSTabView are two independent pieces of
+    /// selection state (custom control driving a borderless native tab view),
+    /// so anything that calls `tabView.selectTabViewItem` directly (not just
+    /// clicks on the pill bar) needs this to avoid the two disagreeing.
+    func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        guard let item = tabViewItem, let idx = tabView.tabViewItems.firstIndex(of: item) else { return }
+        pillTabBar?.select(idx)
     }
 }
 

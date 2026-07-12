@@ -277,6 +277,9 @@ final class InputController: NSObject {
     private func handleVoiceKeyDown(keyCode: Int) {
         activeVoiceKeyCode = keyCode
         recordingTargetElement = focusedElement()  // snapshot before HUD steals focus
+        voiceService.onLevelUpdate = { [weak self] level in
+            DispatchQueue.main.async { self?.voiceHUD.updateAudioLevel(level) }
+        }
         voiceService.startRecording()
         voiceHUD.show(state: .recording, near: getCursorRect(), on: NSScreen.main)
     }
