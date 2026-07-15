@@ -10,7 +10,11 @@ APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 EXECUTABLE="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 RESOURCES="$APP_BUNDLE/Contents/Resources"
 
-SDK=$(xcrun --show-sdk-path 2>/dev/null || echo "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
+# Prefer the Xcode SDK: the CommandLineTools SDK lacks the FoundationModels
+# macro plugin (@Generable fails there with "plugin for module not found").
+SDK=$(xcrun --sdk macosx --show-sdk-path 2>/dev/null \
+    || xcrun --show-sdk-path 2>/dev/null \
+    || echo "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
 ARCH=$(uname -m)
 TARGET="$ARCH-apple-macosx12.0"
 
@@ -40,6 +44,7 @@ SOURCES=(
     "$SRC/AIServices/OpenCCConverter.swift"
     "$SRC/AIServices/DojoCorrectionTable.swift"
     "$SRC/AIServices/GeminiPolishService.swift"
+    "$SRC/AIServices/ApplePolishService.swift"
     "$SRC/AIServices/AudioLevelMeter.swift"
     "$SRC/AIServices/DojoVoiceParser.swift"
     "$SCRIPT_DIR/vendor/sherpa/swift/SherpaOnnx.swift"

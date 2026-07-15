@@ -44,6 +44,9 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
     private var geminiField: NSTextField!
     private var providerStatusLabel: NSTextField!
     private var providerStatusBox: NSBox!
+    private var polishProviderPicker: PillSegmentedControl!
+    private var polishStatusLabel: NSTextField!
+    private var polishStatusBox: NSBox!
     // Voice tab
     private var voiceRecorder: ShortcutRecorderView!
     private var translatePopUp: NSPopUpButton!
@@ -228,6 +231,31 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         // ── Card 2: AI 潤飾服務 ────────────────────────────────
         let polishCard = DesignTokens.makeSectionCard(title: "AI 潤飾服務")
 
+        // Provider picker: Gemini (cloud) vs Apple on-device (offline).
+        let initialPolishIdx = APIKeyStore.shared.polishProvider == .apple ? 1 : 0
+        polishProviderPicker = PillSegmentedControl(
+            labels: ["Gemini（雲端）", "Apple 本地"],
+            selectedIndex: initialPolishIdx)
+        polishProviderPicker.onSelect = { [weak self] idx in
+            self?.polishProviderChanged(idx)
+        }
+
+        let polishBadge = DesignTokens.makeSolidBadge(text: "", fill: .systemBlue)
+        polishStatusBox = polishBadge.box
+        polishStatusLabel = polishBadge.label
+
+        let polishHint = NSTextField(wrappingLabelWithString:
+            "Gemini：雲端潤飾，品質最佳，需網路與 API Key  ·  Apple 本地：完全離線、免 API Key（需 macOS 26 + Apple Intelligence）。\n" +
+            "翻譯（右 ⌘）與口頭修正固定使用 Gemini，不受此設定影響。")
+        polishHint.font = DesignTokens.monoFont(10)
+        polishHint.textColor = .secondaryLabelColor
+        polishHint.preferredMaxLayoutWidth = 420
+
+        [polishProviderPicker, polishStatusBox, polishHint].forEach {
+            polishCard.contentStack.addArrangedSubview($0!)
+        }
+        polishStatusBox.widthAnchor.constraint(equalToConstant: 420).isActive = true
+
         let geminiLabel = NSTextField(labelWithString: "Gemini API Key")
         geminiLabel.font = DesignTokens.monoFont(12)
         geminiField = NSTextField()
@@ -280,9 +308,44 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
 
         updateServiceSectionVisibility()
         updateProviderStatus()
+        updatePolishProviderStatus()
 
         item.view = stack
         return item
+    }
+
+    private func polishProviderChanged(_ selectedIndex: Int) {
+        let wantApple = (selectedIndex == 1)
+        // Transparent fallback: if the user taps Apple but the on-device model
+        // isn't available on this machine, keep Gemini as the effective provider
+        // and explain why in the badge — never silently persist a provider that
+        // will just fail at dictation time. (Runtime failures of an available
+        // Apple model fall back to the raw transcript, never a silent cloud call.)
+        if wantApple, ApplePolishService.availabilityStatus.isAvailable {
+            APIKeyStore.shared.polishProvider = .apple
+        } else {
+            APIKeyStore.shared.polishProvider = .gemini
+        }
+        updatePolishProviderStatus(requestedApple: wantApple)
+    }
+
+    /// Keeps the "AI 潤飾服務" status badge in sync: green when Apple local is
+    /// active, blue for Gemini cloud, orange when the user picked Apple but it
+    /// isn't available (with the plain-language reason).
+    private func updatePolishProviderStatus(requestedApple: Bool? = nil) {
+        let provider = APIKeyStore.shared.polishProvider
+        let apple = ApplePolishService.availabilityStatus
+        let wantApple = requestedApple ?? (provider == .apple)
+        let (icon, text, tint): (String, String, NSColor)
+        if wantApple && !apple.isAvailable {
+            (icon, text, tint) = ("⚠️", "Apple 本地無法使用：\(apple.reason)。目前改用 Gemini（雲端）", .systemOrange)
+        } else if provider == .apple {
+            (icon, text, tint) = ("💻", "目前使用：Apple 本地 — 完全離線運算，不呼叫任何雲端 API", .systemGreen)
+        } else {
+            (icon, text, tint) = ("🌐", "目前使用：Gemini（雲端）— 需要網路連線", .systemBlue)
+        }
+        polishStatusLabel.stringValue = "\(icon)  \(text)"
+        polishStatusBox.fillColor = tint
     }
 
     private func serviceProviderChanged(_ selectedIndex: Int) {
@@ -809,8 +872,10 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         case .google: providerPicker?.select(1)
         case .sherpa: providerPicker?.select(2)
         }
+        polishProviderPicker?.select(APIKeyStore.shared.polishProvider == .apple ? 1 : 0)
         updateServiceSectionVisibility()
         updateProviderStatus()
+        updatePolishProviderStatus()
         voiceRecorder?.setShortcut(PreferencesWindowController.voiceShortcut)
         updateShortcutWarning()
         reloadPromptCards()

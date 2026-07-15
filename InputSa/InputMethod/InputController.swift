@@ -330,6 +330,9 @@ final class InputController: NSObject {
     private func handleVoiceKeyDown(keyCode: Int) {
         activeVoiceKeyCode = keyCode
         recordingTargetElement = focusedElement()  // snapshot before HUD steals focus
+        if APIKeyStore.shared.polishProvider == .apple {
+            ApplePolishService.shared.prewarm()  // wake the local model while the user speaks
+        }
         voiceService.onLevelUpdate = { [weak self] level in
             DispatchQueue.main.async { self?.voiceHUD.updateAudioLevel(level) }
         }
@@ -444,20 +447,46 @@ final class InputController: NSObject {
 
     private func debugLog(_ msg: String) { inputSaLog(msg) }
 
-    /// Gemini polish step in the unified pipeline.
-    /// After polishing (or if Gemini key is absent), injects text directly into the target element.
-    /// No preview step required — text appears immediately; user can Cmd+Z to undo.
+    /// One switch, two call sites (dictation polish + Option+P): route to the
+    /// user's chosen polish provider. Both services share the same
+    /// `Result<String,Error>` main-thread completion, so the caller's post-pass
+    /// and logging are provider-agnostic.
+    private func dispatchPolish(
+        text: String,
+        mode: TranscriptionMode,
+        onPartial: ((String) -> Void)? = nil,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        switch APIKeyStore.shared.polishProvider {
+        case .apple:
+            ApplePolishService.shared.enhance(text: text, mode: mode,
+                                              onPartial: onPartial, completion: completion)
+        case .gemini:
+            GeminiPolishService.shared.enhance(text: text, mode: mode,
+                                               onPartial: onPartial, completion: completion)
+        }
+    }
+
+    /// AI polish step in the unified pipeline (Gemini cloud or Apple local).
+    /// After polishing (or if the provider can't run), injects text directly into
+    /// the target element. No preview step required — text appears immediately;
+    /// user can Cmd+Z to undo.
     private func runAIPolish(_ transcript: String) {
-        guard !APIKeyStore.shared.geminiKey.isEmpty else {
+        let provider = APIKeyStore.shared.polishProvider
+        // Gemini needs a key; Apple is local and needs none.
+        if provider == .gemini, APIKeyStore.shared.geminiKey.isEmpty {
             debugLog("polish SKIPPED (no Gemini key) — injecting raw transcript (\(transcript.count) chars)")
             voiceHUD.hide()
             finishAndInject(transcript)
             return
         }
+        let providerTag = provider == .apple ? "Apple" : "Gemini"
+        let baseLabel = provider == .apple ? "AI 潤飾中（本地）" : "AI 潤飾中"
         let modeName = TranscriptionMode.activePolishModeName
-        voiceHUD.setState(.processing(modeName.map { "AI 潤飾中（\($0)）…" } ?? "AI 潤飾中…"))
-        GeminiPolishService.shared.polish(
-            selectedText: transcript,
+        voiceHUD.setState(.processing(modeName.map { "\(baseLabel)（\($0)）…" } ?? "\(baseLabel)…"))
+        debugLog("polish in (\(providerTag)): \(String(transcript.prefix(120)))")
+        dispatchPolish(
+            text: transcript,
             mode: TranscriptionMode.activePolishMode,
             onPartial: { [weak self] partial in
                 self?.voiceHUD.setState(.processing(Self.streamingPreview(partial, label: "潤飾中")))
@@ -516,8 +545,8 @@ final class InputController: NSObject {
         guard AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selVal) == .success,
               let text = selVal as? String, !text.isEmpty else { return }
 
-        GeminiPolishService.shared.polish(selectedText: text,
-                                          mode: TranscriptionMode.activePolishMode) { [weak self] result in
+        dispatchPolish(text: text,
+                       mode: TranscriptionMode.activePolishMode) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 switch result {

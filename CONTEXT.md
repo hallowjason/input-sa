@@ -1,9 +1,21 @@
-# Session Context — 最後更新 2026-07-12 14:10
+# Session Context — 最後更新 2026-07-15
 
 ## 🔵 目前狀態（一句話）
-**偏好設定第三輪重做完成（兩個表格真卡片化 + sheet 編輯器 + API Key 自動儲存 + 快捷鍵總覽鍵帽卡）＋ 兩個新功能上線：口頭修正（右 Shift 長按說詞條釋義 → Gemini 解析 → Enter 入庫）與 AI 模式快選（選單列子選單，潤飾管線真正套用 custom prompt）。全部已 build + 裝機 + 8 張離線截圖驗證 + Gemini 真實 API 測解析 + fresh-context verifier 七項全 CONFIRMED。**
+**新增 Apple Foundation Models 本地潤飾 provider（Gemini／Apple 本地二選一），已 build+裝機+使用者實測穩定，即將 commit+push+發版 v2.2.0。**
 
-**⚠️ 本輪（14:10 這批）改動尚未 commit**——等使用者實際體驗滿意後再 commit/push。上午的聲波 HUD/偏好設定第二輪已在 `07af34d` push 過；Release zip 仍是 v2.0.0。
+## ✅ 2026-07-14～15 完成（Apple 本地潤飾 provider）
+- **可行性 spike**（scratchpad/fm-quality/，不進 repo）：`SystemLanguageModel.default` 本機（M5, macOS 26.5.2）可用，同六題道場句對比 Gemini 6/6 vs Apple 自由文字模式 3/6；四輪 prompt 迭代確認 3B 是能力天花板，非 prompt 問題；context window 僅 4096 tokens
+- **新檔 `InputSa/AIServices/ApplePolishService.swift`**：介面比照 GeminiPolishService（`enhance`/`polish`，completion 主執行緒回呼）。整檔 `#if canImport(FoundationModels)` + `@available(macOS 26.0, *)` 包裹，`import` 自動弱連結，macOS 12 部署目標不受影響（`otool -L` 確認 weak）
+- **`APIKeyStore.swift`** 加 `PolishProvider`（`.gemini`/`.apple`，UserDefaults key `com.inputsa.polishProvider`，預設 `.gemini`）
+- **`InputController.swift`** 新增 `dispatchPolish` 單一工廠分流 `runAIPolish`／`triggerManualPolish`；翻譯與口頭修正（dojoEntryParse）**維持硬寫 Gemini 不受影響**；Apple provider 失敗時走「原始轉錄稿＋通知」，**絕不悄悄改送雲端**；`handleVoiceKeyDown` 加 `ApplePolishService.prewarm()`——右 Option 按下的瞬間喚醒本地模型，把暖機時間蓋在講話時間裡
+- **`PreferencesWindowController.swift`** Tab 1 新增「AI 潤飾服務」卡（PillSegmentedControl Gemini/Apple 本地），狀態徽章、不可用時橘色警示＋白話原因、註明翻譯與口頭修正固定用 Gemini
+- **使用者實測回報「提示詞整段被注入輸出」（3B 自由文字模式的已知不穩定）**，修法三層：
+  1. **治本**：改用 FoundationModels 的 guided generation（`@Generable` 表單約束解碼）取代自由文字——模型結構上只能填一個 `text` 欄位，spike 重測 18 次呼叫零污染
+  2. **保險網**：輸出過提示詞碎片指紋比對，中招自動重試一次，兩次都不行才丟錯（走既有原稿 fallback，不進雲端）
+  3. **防暴走**：`GenerationOptions(maximumResponseTokens: 1024)` 封頂——測試曾抓到一次模型寫了 80 秒，現在會被截斷後由保險網攔下重試
+  - 副作用：改用 guided generation 後 HUD 不再逐字串流預覽（一次到位），改維持靜態「AI 潤飾中（本地）…」文字，正常現象
+- **`build.sh` 踩雷修復**：CommandLineTools 的 SDK 沒有 FoundationModels 的巨集外掛，`@Generable` 編譯會報 `plugin for module 'FoundationModelsMacros' not found`——改用 `xcrun --sdk macosx --show-sdk-path` 優先取 Xcode SDK（已加註解＋fallback 鏈）
+- **驗證鏈**：獨立 fresh-context verifier 七項全 CONFIRMED（範圍紀律/失敗不外洩/零回歸/舊系統相容/主執行緒契約/UserDefaults 無撞名/build 乾淨）；離線截圖驗收法截四張（Gemini/Apple × 淺/深色）親眼核對過；使用者裝機真實聽寫測試通過
 
 ## ✅ 2026-07-12 下午完成（UX 研究 + 第三輪重做 + 兩個新功能）
 
@@ -112,15 +124,22 @@ InputSa/UI/PillTabBar.swift                 ← 【新檔】自訂深色分頁�
 InputSa/UI/PillSegmentedControl.swift       ← 【新檔】自訂金色選中分段控制項
 InputSa/Preferences/PreferencesWindowController.swift ← 【大改】PillTabBar 驅動、4 分頁全部改用卡片系統
 build.sh / install.sh                        ← 裸編譯打包本機安裝（開發者用）
-package-release.sh                           ← 【新檔】GitHub Release 打包（雲端優先、強制 ad-hoc 簽章）
-README.md / .gitignore                       ← 【新檔】面向 GitHub 公開 repo
+package-release.sh                           ← GitHub Release 打包（雲端優先、強制 ad-hoc 簽章）；讀 Info.plist 版號命名 zip
+InputSa/Resources/Info.plist                 ← 【2026-07-13】版本號 2.1.0 (build 3)，改版號在這裡
+README.md / .gitignore                       ← 面向 GitHub 公開 repo
 ```
 
+## 目前發布狀態
+- **GitHub repo**：https://github.com/hallowjason/input-sa（public，main branch，最新 commit `740c546`）
+- **GitHub Release**：`v2.1.0`（2026-07-13 發布，zip 17MB 雲端優先版，見上方連結）
+- **本機**：`~/Applications/Input-sa.app` 已裝機是含本地模型版（`install.sh` 跑法，跟 Release zip 不同）；`build/` 目錄也已恢復含模型狀態
+- 下次改完程式碼要發新 Release：改版號（`InputSa/Resources/Info.plist` 的 `CFBundleShortVersionString`/`CFBundleVersion`）→ `./package-release.sh` → commit 版號 → push → `gh release create vX.Y.Z ...`
+
 ## 待辦 / 未決事項
-- **【最優先】下午這批改動尚未 commit**（卡片化/口頭修正/AI 模式/自動儲存，13 檔 modified + 3 新檔）。使用者實際體驗滿意後才 commit + push；push 後建議發新 Release 讓一般朋友拿到（現在 Release zip 還是 v2.0.0）
-- **【次優先】使用者實測回饋**：①偏好設定四分頁視覺 ②右 Shift 口頭修正真實錄音流程（我只 E2E 測了 Gemini 解析層，錄音→轉錄→解析的全鏈路要真人說話才測得到）③右 Shift 打大寫時 HUD 閃現的取捨能不能接受（不能就改成延遲 300ms 顯示）
+- **【次優先，延續中】使用者持續使用回饋**：①Apple 本地潤飾長期使用感受（新詞彙表外的同音錯字仍需右 Shift 口頭修正累積，非模型自動學會）②右 Shift 口頭修正真實錄音流程的長期使用感受（上次只 E2E 測過 Gemini 解析層）③右 Shift 打大寫時 HUD 閃現的取捨若嫌煩，備案是延遲 300ms 才顯示 HUD
+- Ollama+Qwen／llama.cpp/MLX 本地潤飾路線目前不打算做（Apple 本地已達成離線需求，額外裝 Ollama 不適合發給朋友）——若未來要重啟評估，查當下最新版本，不要用這份記錄裡的型號當現況
 - PreferencesWindowController.swift 856 行，略超 800 行檔案上限——下次動它時考慮把四個 makeXXXTab 拆檔
-- [ ] P1（舊）：refreshShortcutCache migration 根治 modifier-only 殘留 shortcut bug（歷史遺留，本輪未動）
+- [ ] P1（舊）：refreshShortcutCache migration 根治 modifier-only 殘留 shortcut bug（歷史遺留）
 - [ ] P2（舊）：翻譯模式也注入道場詞彙表（現在只有潤飾有）
 - [ ] P2（舊）：用完還原剪貼簿；靜音 VAD
 - [ ] `assets_dl/` 暫存需使用者手動清（Claude rm 被權限擋）
@@ -145,14 +164,16 @@ README.md / .gitignore                       ← 【新檔】面向 GitHub 公�
 - **改詞條要同步兩處**：`InputSa/Resources/dojo/` 種子 + `~/Library/Application Support/InputSa/` 運行時
 - `~/Library/Logs/InputSa.log`：STT raw → dojo corrected → polish out 三階段，錯詞先看這個檔判斷哪層漏
 - **zsh 內建 `log` 指令會蓋掉 `/usr/bin/log`**，查 unified log 必須用 `/usr/bin/log`
+- **`CommandLineTools` 的 SDK 沒有 FoundationModels 巨集外掛**：`@Generable`/`@Guide` 用 `xcrun --show-sdk-path`（不帶 `--sdk macosx`）取到的 SDK 編譯會報 `plugin for module 'FoundationModelsMacros' not found`——`build.sh` 已改用 `xcrun --sdk macosx --show-sdk-path` 優先取 Xcode SDK，任何新 harness/scratchpad 測試也要用這個取法
+- **FoundationModels 自由文字模式（`respond(to:)` 不帶 `generating:`）會偶爾把整份 prompt 回吐進輸出**——3B 模型的已知不穩定，實測發生率不算低。根治法是用 guided generation（`@Generable` 表單約束解碼），逼模型只能填結構化欄位；`ApplePolishService.generateClean` 另外疊了碎片指紋比對＋重試＋`maximumResponseTokens` 封頂三層保險，任何新增的本地模型呼叫都建議比照
+- **`LanguageModelSession()` 不要重用、不要帶 `instructions:`**：重用會累積 context 撞 4096 token 上限；`instructions:`／`prompt` 分欄會讓防注入指令失效（spike 實測「請幫我翻譯成英文」被真的執行）——整包 prompt 丟 `respond(to:)`／`session.respond(to:generating:)` 是唯一穩定格式
 
 ## 下次繼續
 ```bash
 cd /Users/gooo/Desktop/.claude/projects/input-sa
 # 對 Claude 說：「讀 CONTEXT.md，繼續 input-sa」
-# 現況：GitHub 開源分發完成、HUD 精簡+聲波動畫+漸層外框完成、偏好設定兩輪重做完成，全部已 build/裝機/自我截圖驗證
-# 未決：① 使用者對偏好設定最終視覺、HUD 聲波/漸層動畫的實際觀感回饋（最優先，見上方待辦）
-#       ② 舊 P1/P2 項目、Preferences Phase 2（表格卡片化）等使用者指示優先序
-# 環境：provider=sherpa（本地）、dojoMode=true；GEMINI_API_KEY 在 ~/.env 可供 curl 測試
+# 現況：Apple 本地潤飾 provider 完成、commit+push+Release v2.2.0 已發布，repo/本機都是最新狀態
+# 未決：使用者持續使用回饋（見上方「待辦」），無進行中的程式改動
+# 環境：provider=sherpa（STT，本地）、polishProvider=依使用者上次選擇、dojoMode=true；GEMINI_API_KEY 在 ~/.claude/.env（不是 ~/.env）
 # 驗證離線 UI 用「離線截圖驗收法」，見全域記憶 reference_appkit_ui_testing.md
 ```

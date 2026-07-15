@@ -12,6 +12,7 @@ final class APIKeyStore {
     }
 
     private static let voiceProviderKey = "com.inputsa.voiceProvider"
+    private static let polishProviderKey = "com.inputsa.polishProvider"
 
     // MARK: - Voice Provider
 
@@ -28,6 +29,26 @@ final class APIKeyStore {
         }
         set {
             UserDefaults.standard.set(newValue.rawValue, forKey: Self.voiceProviderKey)
+        }
+    }
+
+    // MARK: - Polish Provider
+
+    /// Which service handles dictation polish and Option+P text polish. Defaults
+    /// to Gemini (cloud); Apple is the fully-offline on-device option. Translation
+    /// and 口頭修正 always use Gemini regardless of this setting.
+    enum PolishProvider: String {
+        case gemini = "gemini"
+        case apple  = "apple"
+    }
+
+    var polishProvider: PolishProvider {
+        get {
+            let raw = UserDefaults.standard.string(forKey: Self.polishProviderKey) ?? "gemini"
+            return PolishProvider(rawValue: raw) ?? .gemini
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: Self.polishProviderKey)
         }
     }
 
