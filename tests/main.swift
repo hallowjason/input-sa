@@ -68,6 +68,32 @@ let noPhonetic = DojoCorrectionTable(entries: [
 let r11 = noPhonetic.correct("今天拜妙吉大帝", dojoMode: false)
 check(r11 == "今天拜妙吉大帝", "phonetic:false skips pass 2", "got \(r11)")
 
+print("{num} wildcard:")
+let numTable = DojoCorrectionTable(entries: [
+    DojoCorrectionTable.Entry(wrong: "{num}粒", correct: "{num}例", tier: "always", phonetic: false),
+])
+let n1 = numTable.correct("2粒樣品和10粒對照", dojoMode: false)
+check(n1 == "2例樣品和10例對照", "{num} matches Arabic digit runs", "got \(n1)")
+
+let n2 = numTable.correct("兩粒樣品", dojoMode: false)
+check(n2 == "兩例樣品", "{num} matches Chinese numerals", "got \(n2)")
+
+// Bad rule: pattern has {num} but replacement doesn't → treated as literal no-op,
+// must NOT touch any numbers.
+let badNumTable = DojoCorrectionTable(entries: [
+    DojoCorrectionTable.Entry(wrong: "{num}粒", correct: "例", tier: "always", phonetic: false),
+])
+let n3 = badNumTable.correct("2粒樣品", dojoMode: false)
+check(n3 == "2粒樣品", "malformed {num} rule (no {num} in correct) is a no-op", "got \(n3)")
+
+// Existing non-{num} literal entry behaviour is unchanged alongside {num} rules.
+let mixedNumTable = DojoCorrectionTable(entries: [
+    DojoCorrectionTable.Entry(wrong: "{num}粒", correct: "{num}例", tier: "always", phonetic: false),
+    DojoCorrectionTable.Entry(wrong: "改刀系統", correct: "道務系統", tier: "always"),
+])
+let n4 = mixedNumTable.correct("改刀系統有3粒", dojoMode: false)
+check(n4 == "道務系統有3例", "{num} and literal entries coexist", "got \(n4)")
+
 print("")
 if failures == 0 {
     print("ALL TESTS PASSED")

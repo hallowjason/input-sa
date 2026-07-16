@@ -109,9 +109,19 @@ final class DojoCorrectionTable {
     func correct(_ text: String, dojoMode: Bool) -> String {
         var result = text
         for entry in entries where Self.isActive(entry, dojoMode: dojoMode) {
-            result = result.replacingOccurrences(of: entry.wrong, with: entry.correct)
+            if Self.hasNumToken(entry) {
+                // `{num}` wildcard entry (e.g. wrong="{num}粒", correct="{num}例"):
+                // matches a run of digits and substitutes it verbatim. Malformed
+                // wildcards return the text unchanged (never crash).
+                result = Self.numWildcardReplace(result, wrong: entry.wrong, correct: entry.correct)
+            } else {
+                result = result.replacingOccurrences(of: entry.wrong, with: entry.correct)
+            }
         }
-        for entry in entries where Self.isActive(entry, dojoMode: dojoMode) && entry.phonetic {
+        for entry in entries
+        where Self.isActive(entry, dojoMode: dojoMode) && entry.phonetic && !Self.hasNumToken(entry) {
+            // Phonetic (pinyin) matching is meaningless for a wildcard whose
+            // `correct` still contains the literal `{num}` token — skip it.
             result = Self.phoneticReplace(result, correct: entry.correct)
         }
         return result
@@ -225,6 +235,76 @@ final class DojoCorrectionTable {
             i += 1
         }
         return result
+    }
+
+    // MARK: - {num} wildcard replacement
+
+    private static let numToken = "{num}"
+
+    /// Characters `{num}` matches: ASCII digits plus common Chinese numerals.
+    private static let numChars: Set<Character> = Set("0123456789零〇一二两兩三四五六七八九十百千万萬亿億几幾")
+
+    /// An entry uses the wildcard machinery when its `wrong` mentions `{num}`.
+    private static func hasNumToken(_ e: Entry) -> Bool {
+        e.wrong.contains(numToken) || e.correct.contains(numToken)
+    }
+
+    /// Split a string on a single `{num}` token. Returns (prefix, suffix) only
+    /// when the token appears exactly once; `nil` otherwise (0 or ≥2 tokens).
+    private static func splitOnNumToken(_ s: String) -> (prefix: String, suffix: String)? {
+        let parts = s.components(separatedBy: numToken)
+        guard parts.count == 2 else { return nil }
+        return (parts[0], parts[1])
+    }
+
+    /// Replace `pattern` occurrences where `{num}` stands for a run of numeric
+    /// characters, substituting the matched run verbatim into `replacement`.
+    ///
+    /// A rule is only applied when BOTH `wrong` and `correct` contain exactly one
+    /// `{num}`, and the pattern is anchored (has a non-empty prefix or suffix) —
+    /// a bare `{num}` with nothing around it would match every number and is
+    /// skipped. Any disqualifying rule returns `text` unchanged (treated as a
+    /// no-op literal entry), never a crash.
+    static func numWildcardReplace(_ text: String, wrong: String, correct: String) -> String {
+        guard let (wp, ws) = splitOnNumToken(wrong),
+              let (cp, cs) = splitOnNumToken(correct) else { return text }
+        // Bare `{num}` (no surrounding characters) is too greedy — skip it.
+        guard !(wp.isEmpty && ws.isEmpty) else { return text }
+
+        let chars = Array(text)
+        let wpArr = Array(wp), wsArr = Array(ws)
+        let cpArr = Array(cp), csArr = Array(cs)
+        var result: [Character] = []
+        result.reserveCapacity(chars.count)
+
+        var i = 0
+        while i < chars.count {
+            if matchLiteral(chars, at: i, pattern: wpArr) {
+                let runStart = i + wpArr.count
+                var j = runStart
+                while j < chars.count && numChars.contains(chars[j]) { j += 1 }
+                // Need at least one numeric char, then the suffix must follow.
+                if j > runStart && matchLiteral(chars, at: j, pattern: wsArr) {
+                    result.append(contentsOf: cpArr)
+                    result.append(contentsOf: chars[runStart..<j])   // matched number, verbatim
+                    result.append(contentsOf: csArr)
+                    i = j + wsArr.count
+                    continue
+                }
+            }
+            result.append(chars[i])
+            i += 1
+        }
+        return String(result)
+    }
+
+    /// True when `pattern` matches `chars` starting at `at`. Empty pattern always
+    /// matches (used when a wildcard prefix/suffix is empty).
+    private static func matchLiteral(_ chars: [Character], at: Int, pattern: [Character]) -> Bool {
+        guard !pattern.isEmpty else { return true }
+        guard at + pattern.count <= chars.count else { return false }
+        for k in 0..<pattern.count where chars[at + k] != pattern[k] { return false }
+        return true
     }
 
     // MARK: - Loading

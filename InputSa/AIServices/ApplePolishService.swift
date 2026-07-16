@@ -117,10 +117,16 @@ final class ApplePolishService {
             // unused and the HUD keeps its static "AI 潤飾中（本地）…" state.
             _ = onPartial
             let prompt = mode.systemPrompt(transcript: text)
+            // Standard polish preserves meaning — output length ≈ input length,
+            // so it gets a tight plausibility bound. Custom styles (IG 貼文 etc.)
+            // may legitimately expand, so only they keep the loose one.
+            let isStandard: Bool
+            if case .standard = mode { isStandard = true } else { isStandard = false }
             Task {
                 do {
                     let clean = try await Self.generateClean(prompt: prompt,
-                                                             inputLength: text.count)
+                                                             inputLength: text.count,
+                                                             tightBound: isStandard)
                     DispatchQueue.main.async { completion(.success(clean)) }
                 } catch {
                     let msg = Self.friendlyError(error)
@@ -162,19 +168,30 @@ final class ApplePolishService {
         "<transcript", "</transcript", "領域詞彙表", "口述文字編輯", "詞彙表規則",
         "整段語意", "逐字保守替換", "口頭禪贅字", "整理後的文字", "待整理的資料",
         "風格指令", "待處理的資料",
+        // Commentary tells: the model sometimes appends an explanation of the
+        // sentence instead of just editing it (user-reported 2026-07-16,
+        // 「…這段話的意思是說…」). Dictated speech says 「我的意思是」, never
+        // these meta-references to "this passage".
+        "這段話的意思", "這句話的意思", "這段文字的意思", "上述內容", "以上內容",
     ]
 
     @available(macOS 26.0, *)
-    private static func generateClean(prompt: String, inputLength: Int) async throws -> String {
+    private static func generateClean(prompt: String, inputLength: Int,
+                                      tightBound: Bool) async throws -> String {
         // Cap the response: the model occasionally runs away (observed: one 80s
-        // generation that filled the whole 4096-token window). Polish output is
-        // never longer than its input by much, so 1024 tokens is generous; a
-        // runaway now gets cut off in seconds and rejected below instead.
-        let options = GenerationOptions(maximumResponseTokens: 1024)
+        // generation that filled the whole 4096-token window, and a 6-char input
+        // ballooned into a 193-char fabrication woven from the dojo vocabulary).
+        // For standard polish the cap scales with the input so a runaway on a
+        // short dictation is cut off within a second or two instead of six.
+        let maxTokens = tightBound ? min(1024, max(128, inputLength * 4)) : 1024
+        let options = GenerationOptions(maximumResponseTokens: maxTokens)
         // A truncated runaway can also slip past the fingerprints, so anything
-        // implausibly longer than the input is rejected too (custom styles may
-        // expand text, hence the loose 3x bound).
-        let maxPlausible = max(inputLength * 3, inputLength + 200)
+        // implausibly longer than the input is rejected too. Standard polish
+        // preserves meaning (tight 2x bound — the old +200 floor let a 6-char
+        // input pass a 193-char fabrication); custom styles may expand (3x).
+        let maxPlausible = tightBound
+            ? max(inputLength * 2, inputLength + 40)
+            : max(inputLength * 3, inputLength + 200)
         for attempt in 1...2 {
             // Fresh session per attempt (see class doc): no carried context.
             let session = LanguageModelSession()

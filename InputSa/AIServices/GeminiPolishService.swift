@@ -256,6 +256,11 @@ private final class SSEStreamTask: NSObject, URLSessionDataDelegate {
                let msg = err["message"] as? String {
                 message = msg
             }
+            // Self-heal: a rejected key means the in-memory cache may hold a
+            // stale/garbled Keychain read — drop it so the next request re-reads.
+            if message.contains("API key not valid") || message.contains("API_KEY_INVALID") {
+                APIKeyStore.shared.invalidateGeminiKeyCache()
+            }
             finish(.failure(NSError(domain: "InputSa", code: 12,
                 userInfo: [NSLocalizedDescriptionKey: "Gemini(\(modelName)): \(message)"])))
             return

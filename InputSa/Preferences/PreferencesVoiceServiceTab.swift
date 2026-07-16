@@ -45,12 +45,24 @@ extension PreferencesWindowController {
                                                  url: "https://console.cloud.google.com/apis/credentials")),
         ])
 
+        // Mute-while-recording toggle (default off). Not a conditional row —
+        // it carries its own leading hairline so it separates cleanly whether or
+        // not the provider key sections above it are visible.
+        muteWhileRecordingSwitch = NSSwitch()
+        muteWhileRecordingSwitch.state = PreferencesWindowController.muteWhileRecording ? .on : .off
+        muteWhileRecordingSwitch.target = self
+        muteWhileRecordingSwitch.action = #selector(muteWhileRecordingChanged)
+
         let transcribeCard = DesignTokens.groupCard([
             status.row,
             DesignTokens.hairline(),
             DesignTokens.row(title: "服務", control: providerPicker),
             groqSection,
             googleSection,
+            DesignTokens.hairline(),
+            DesignTokens.row(title: "錄音時靜音喇叭",
+                             subtitle: "按住錄音時暫時靜音系統喇叭，避免外放聲音被錄進去",
+                             control: muteWhileRecordingSwitch),
         ], autoSeparators: false)
 
         let serviceHint = DesignTokens.caption(
@@ -188,6 +200,10 @@ extension PreferencesWindowController {
 
     @objc private func polishPopupChanged(_ sender: NSPopUpButton) {
         polishProviderChanged(sender.indexOfSelectedItem)
+    }
+
+    @objc private func muteWhileRecordingChanged() {
+        PreferencesWindowController.muteWhileRecording = (muteWhileRecordingSwitch.state == .on)
     }
 
     private func polishProviderChanged(_ selectedIndex: Int) {

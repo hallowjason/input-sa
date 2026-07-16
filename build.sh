@@ -38,6 +38,7 @@ SOURCES=(
     "$SRC/AIServices/TranscriptionMode.swift"
     "$SRC/AIServices/VoiceServiceProtocol.swift"
     "$SRC/AIServices/APIKeyStore.swift"
+    "$SRC/AIServices/SystemAudioMute.swift"
     "$SRC/AIServices/GroqVoiceService.swift"
     "$SRC/AIServices/GoogleVoiceService.swift"
     "$SRC/AIServices/SherpaVoiceService.swift"
@@ -48,6 +49,8 @@ SOURCES=(
     "$SRC/AIServices/ApplePolishService.swift"
     "$SRC/AIServices/AudioLevelMeter.swift"
     "$SRC/AIServices/DojoVoiceParser.swift"
+    "$SRC/AIServices/TranscriptNumberFormatter.swift"
+    "$SRC/AIServices/UsageStatsStore.swift"
     "$SCRIPT_DIR/vendor/sherpa/swift/SherpaOnnx.swift"
     "$SRC/UI/PixelGuanyinRenderer.swift"
     "$SRC/UI/HUDCharacter.swift"
@@ -65,6 +68,7 @@ SOURCES=(
     "$SRC/Preferences/PreferencesShortcutsTab.swift"
     "$SRC/Preferences/PreferencesModesTab.swift"
     "$SRC/Preferences/PreferencesDojoTab.swift"
+    "$SRC/Preferences/PreferencesDashboardTab.swift"
 )
 
 # Create bundle structure
@@ -81,6 +85,7 @@ swiftc \
     -framework AppKit \
     -framework Carbon \
     -framework AVFoundation \
+    -framework CoreAudio \
     -framework Security \
     -framework ApplicationServices \
     -import-objc-header "$SHERPA_BRIDGE" \
@@ -114,73 +119,12 @@ cp "$SRC/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 # PkgInfo is required by macOS for app bundle validation
 printf 'APPLINSA' > "$APP_BUNDLE/Contents/PkgInfo"
 
-# Generate menu icon using pure Python (no external dependencies)
-# Creates a valid 16x16 RGBA PNG then converts to TIFF using sips
-ICON_PNG="$RESOURCES/inputsa-menu.png"
-ICON_TIFF="$RESOURCES/inputsa-menu.tiff"
-
-python3 - "$ICON_PNG" << 'PYEOF'
-import sys, struct, zlib
-
-output_png = sys.argv[1]
-
-# 16x16 pixel pattern for the menu icon (菩薩 silhouette)
-# Row 0 = top; 1 = dark pixel, 0 = transparent
-rows = [
-    0b0000011110000000,
-    0b0000100001000000,
-    0b0001000000100000,
-    0b0001011010100000,
-    0b0001000000100000,
-    0b0000111111000000,
-    0b0000010010000000,
-    0b0000010010000000,
-    0b0000111111000000,
-    0b0001000000100000,
-    0b0001000000100000,
-    0b0000100001000000,
-    0b0000011110000000,
-    0b0000001100000000,
-    0b0000001100000000,
-    0b0000001100000000,
-]
-
-W, H = 16, 16
-
-# Build raw PNG image data (RGBA, filter byte 0 per scanline)
-raw = b''
-for row in rows:
-    raw += b'\x00'  # filter: None
-    for x in range(W):
-        if row & (1 << (15 - x)):
-            raw += bytes([44, 44, 44, 255])   # dark grey, opaque
-        else:
-            raw += bytes([0, 0, 0, 0])         # transparent
-
-compressed = zlib.compress(raw, 9)
-
-def chunk(tag, data):
-    crc = zlib.crc32(tag + data) & 0xFFFFFFFF
-    return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', crc)
-
-png  = b'\x89PNG\r\n\x1a\n'
-png += chunk(b'IHDR', struct.pack('>IIBBBBB', W, H, 8, 6, 0, 0, 0))
-png += chunk(b'IDAT', compressed)
-png += chunk(b'IEND', b'')
-
-with open(output_png, 'wb') as f:
-    f.write(png)
-print(f'PNG icon generated: {output_png}')
-PYEOF
-
-# Convert PNG → TIFF using macOS built-in sips (no Xcode or Pillow needed)
-if [ -f "$ICON_PNG" ]; then
-    sips -s format tiff "$ICON_PNG" --out "$ICON_TIFF" > /dev/null 2>&1
-    rm -f "$ICON_PNG"
-    echo "✅ Menu icon: $ICON_TIFF"
-else
-    echo "⚠️  Icon generation failed — skipping (input method will work without it)"
-fi
+# Menu bar icon (template image): geometric volume-bars mark, 72px @2x source
+# in the repo. AppDelegate loads it via Bundle.main and sets isTemplate so it
+# adapts to light/dark menu bars automatically. (Replaced the old generated
+# 菩薩-silhouette tiff that nothing referenced.)
+cp "$SRC/Resources/inputsa-menu@2x.png" "$RESOURCES/inputsa-menu@2x.png"
+echo "✅ Menu icon: $RESOURCES/inputsa-menu@2x.png"
 
 echo "📦 App bundle created: $APP_BUNDLE"
 echo ""

@@ -9,6 +9,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var accessibilityPollTimer: Timer?
     private var aiModeMenu: NSMenu?
     private var sharedSyncTimer: Timer?
+    /// Disabled "今日：N 字・M 次" row, retitled whenever the menu opens.
+    private var todaySummaryItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
@@ -59,7 +61,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
-            button.title = "🎙"
+            // Geometric volume-bars mark as a template image — adapts to
+            // light/dark menu bars and highlight states. Falls back to the
+            // old emoji if the resource is somehow missing from the bundle.
+            if let path = Bundle.main.path(forResource: "inputsa-menu@2x", ofType: "png"),
+               let icon = NSImage(contentsOfFile: path) {
+                icon.isTemplate = true
+                icon.size = NSSize(width: 18, height: 18)
+                button.image = icon
+                button.imagePosition = .imageOnly
+            } else {
+                button.title = "🎙"
+            }
             button.toolTip = "Input-sa — 語音輸入 & 文字潤飾"
         }
 
@@ -77,6 +90,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         aiModeMenu = submenu
         menu.addItem(aiModeItem)
         menu.addItem(NSMenuItem.separator())
+        // Today's usage summary — disabled (informational), retitled on open.
+        let todayItem = NSMenuItem(title: "今日：0 字・0 次", action: nil, keyEquivalent: "")
+        todayItem.isEnabled = false
+        todaySummaryItem = todayItem
+        menu.addItem(todayItem)
         menu.addItem(withTitle: "語音輸入：長按右 Option 錄音，放開後自動輸出", action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "語音翻譯：長按右 Command 說中文，放開後輸出翻譯", action: nil, keyEquivalent: "")
         menu.addItem(NSMenuItem.separator())
@@ -85,6 +103,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "結束 Input-sa", action: #selector(quit), keyEquivalent: "q")
             .target = self
+        // Delegate drives menuNeedsUpdate for the today summary (the AI 模式
+        // submenu has its own delegate assignment above).
+        menu.delegate = self
         statusItem?.menu = menu
     }
 
@@ -92,6 +113,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Rebuilt each time the menu opens so modes added/removed in Preferences
     /// show up without an app restart.
     func menuNeedsUpdate(_ menu: NSMenu) {
+        // Top-level status menu: refresh the today summary and stop.
+        if menu === statusItem?.menu {
+            let today = UsageStatsStore.shared.today()
+            let f = NumberFormatter()
+            f.numberStyle = .decimal
+            let chars = f.string(from: NSNumber(value: today.chars)) ?? "\(today.chars)"
+            let segs = f.string(from: NSNumber(value: today.segments)) ?? "\(today.segments)"
+            todaySummaryItem?.title = "今日：\(chars) 字・\(segs) 次"
+            return
+        }
         guard menu === aiModeMenu else { return }
         menu.removeAllItems()
         let activeID = TranscriptionMode.activeCustomPromptID

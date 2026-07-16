@@ -26,6 +26,16 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
         set { UserDefaults.standard.set(newValue, forKey: dojoModeKey) }
     }
 
+    // MARK: - Mute-while-recording toggle (read by InputController on record start)
+    private static let muteWhileRecordingKey = "com.inputsa.muteWhileRecording"
+
+    /// Whether to mute the system speaker while a PTT recording is active.
+    /// Defaults to off — must not change existing users' behaviour.
+    static var muteWhileRecording: Bool {
+        get { UserDefaults.standard.bool(forKey: muteWhileRecordingKey) }
+        set { UserDefaults.standard.set(newValue, forKey: muteWhileRecordingKey) }
+    }
+
     static var voiceShortcut: ShortcutRecorderView.Shortcut? {
         get {
             guard let data = UserDefaults.standard.data(forKey: voiceShortcutKey) else { return nil }
@@ -58,6 +68,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
     var polishStatusLabel: NSTextField!
     var polishStatusCaption: NSTextField!
     var polishStatusDot: StatusDotView!
+    var muteWhileRecordingSwitch: NSSwitch!
     // Shortcuts pane
     var voiceRecorder: ShortcutRecorderView!
     var translatePopUp: NSPopUpButton!
@@ -74,6 +85,15 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
     /// Non-nil while the 🎙 voice-add button is recording.
     var voiceAddService: VoiceServiceProtocol?
     var voiceAddButton: AccentTextButton!
+    // Usage-stats dashboard pane (value labels refreshed on show)
+    var dashboardTodayChars: NSTextField?
+    var dashboardTodaySegments: NSTextField?
+    var dashboardTodayDuration: NSTextField?
+    var dashboardTotalChars: NSTextField?
+    var dashboardTotalSegments: NSTextField?
+    var dashboardTotalDuration: NSTextField?
+    var dashboardAvgChars: NSTextField?
+    var dashboardChart: UsageBarChartView?
 
     private init() {
         let win = NSWindow(
@@ -110,6 +130,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
             .init(title: "快捷鍵", symbol: "keyboard"),
             .init(title: "AI 模式", symbol: "sparkles"),
             .init(title: "道場詞庫", symbol: "character.book.closed"),
+            .init(title: "使用統計", symbol: "chart.bar.xaxis"),
         ], selectedIndex: 0)
         sidebar.onSelect = { [weak self] idx in self?.showPane(idx) }
 
@@ -118,6 +139,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
             makePane(title: "快捷鍵", content: makeShortcutsContent()),
             makePane(title: "AI 模式", content: makeModesContent()),
             makePane(title: "道場詞庫", content: makeDojoContent()),
+            makePane(title: "使用統計", content: makeDashboardContent()),
         ]
 
         contentView.addSubview(sidebar)
@@ -193,6 +215,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
         guard (0..<panes.count).contains(index) else { return }
         for (i, pane) in panes.enumerated() { pane.isHidden = (i != index) }
         sidebar.select(index)
+        refreshDashboard()   // cheap + nil-safe; keeps the stats current on each show
         panes[index].documentView?.scroll(.zero)   // FlippedView: origin = top
     }
 
@@ -218,6 +241,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
         reloadPromptCards()
         dojoModeSwitch?.state = PreferencesWindowController.dojoMode ? .on : .off
         reloadDojoCards()
+        refreshDashboard()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

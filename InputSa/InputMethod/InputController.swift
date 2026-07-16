@@ -31,6 +31,10 @@ final class InputController: NSObject {
     private var correctionRecordingStartTime: Date?
     /// Voice-parsed dojo entry awaiting the user's Enter (save) / Esc (discard).
     private var pendingDojoEntry: DojoCorrectionTable.Entry?
+    /// Wall-clock start of the current recording, captured in handleVoiceKeyDown.
+    /// The type-specific *RecordingStartTime properties are nil'd before the async
+    /// completion fires, so usage-stats duration is measured from this one instead.
+    private var recordingStartTime: Date?
     /// AX element that was focused when recording began — used for injection after API calls complete.
     private var recordingTargetElement: AXUIElement?
     private lazy var polishHUD: NSPanel = makePolishHUD()
@@ -267,6 +271,7 @@ final class InputController: NSObject {
             correctionKeyRecording = false
             correctionRecordingStartTime = nil
             activeVoiceKeyCode = nil
+            SystemAudioMute.shared.endMute()   // restore speaker on the combo-cancel path
             voiceService.cancelRecording()
             voiceHUD.hide()
             return Unmanaged.passRetained(event)
@@ -331,9 +336,15 @@ final class InputController: NSObject {
 
     private func handleVoiceKeyDown(keyCode: Int) {
         activeVoiceKeyCode = keyCode
+        recordingStartTime = Date()   // unified start for usage-stats duration
         recordingTargetElement = focusedElement()  // snapshot before HUD steals focus
         if APIKeyStore.shared.polishProvider == .apple {
             ApplePolishService.shared.prewarm()  // wake the local model while the user speaks
+        }
+        // Mute the speaker while recording so its output can't echo back into the
+        // mic (opt-in; endMute on every stop/cancel path is a safe no-op if off).
+        if UserDefaults.standard.bool(forKey: "com.inputsa.muteWhileRecording") {
+            SystemAudioMute.shared.beginMute()
         }
         voiceService.onLevelUpdate = { [weak self] level in
             DispatchQueue.main.async { self?.voiceHUD.updateAudioLevel(level) }
@@ -344,6 +355,12 @@ final class InputController: NSObject {
 
     private func handleVoiceKeyUp(translate: Bool = false, correction: Bool = false) {
         activeVoiceKeyCode = nil
+        SystemAudioMute.shared.endMute()   // restore speaker as soon as recording stops
+
+        // Capture recording duration now — the completion below is async and the
+        // start-time property is about to be needed for the next recording.
+        let durationMs = recordingStartTime.map { Int(Date().timeIntervalSince($0) * 1000) } ?? 0
+        recordingStartTime = nil
         voiceHUD.setState(.processing("轉錄中…"))
         voiceService.stopAndTranscribe { [weak self] result in
             DispatchQueue.main.async {
@@ -358,11 +375,11 @@ final class InputController: NSObject {
                     // phrase is indistinguishable from a command, so translation is
                     // shortcut-only now (right-⌘, target language set in Preferences).
                     if correction {
-                        self.runDojoVoiceAdd(transcript)
+                        self.runDojoVoiceAdd(transcript)   // 口頭修正 is not usage-tracked
                     } else if translate {
-                        self.runTranslate(transcript)
+                        self.runTranslate(transcript, durationMs: durationMs)
                     } else {
-                        self.runAIPolish(transcript)
+                        self.runAIPolish(transcript, durationMs: durationMs)
                     }
                 }
             }
@@ -439,7 +456,8 @@ final class InputController: NSObject {
     /// Translate PTT pipeline: transcript → Gemini translation → inject.
     /// Unlike polish, a failed translation must NOT inject the original Chinese.
     /// `lang` overrides the preference (spoken command names its own language).
-    private func runTranslate(_ transcript: String, lang overrideLang: String? = nil) {
+    private func runTranslate(_ transcript: String, lang overrideLang: String? = nil,
+                              durationMs: Int = 0) {
         guard !APIKeyStore.shared.geminiKey.isEmpty else {
             voiceHUD.hide()
             showError("語音翻譯需要 Gemini API Key，請在偏好設定（Ctrl+Option+P）填入。")
@@ -460,7 +478,11 @@ final class InputController: NSObject {
                 switch result {
                 case .success(let translated):
                     self.debugLog("translate OK (\(transcript.count) → \(translated.count) chars)")
-                    self.finishAndInject(translated)
+                    // Number formatting is a no-op for most non-CJK output but harmless
+                    // and keeps all injected dictation/translation text on one path.
+                    let out = TranscriptNumberFormatter.format(translated)
+                    self.finishAndInject(out)
+                    UsageStatsStore.shared.record(chars: out.count, durationMs: durationMs)
                 case .failure(let err):
                     self.debugLog("translate FAILED: \(err.localizedDescription)")
                     self.showError("翻譯失敗：\(err.localizedDescription)")
@@ -495,13 +517,15 @@ final class InputController: NSObject {
     /// After polishing (or if the provider can't run), injects text directly into
     /// the target element. No preview step required — text appears immediately;
     /// user can Cmd+Z to undo.
-    private func runAIPolish(_ transcript: String) {
+    private func runAIPolish(_ transcript: String, durationMs: Int = 0) {
         let provider = APIKeyStore.shared.polishProvider
         // Gemini needs a key; Apple is local and needs none.
         if provider == .gemini, APIKeyStore.shared.geminiKey.isEmpty {
             debugLog("polish SKIPPED (no Gemini key) — injecting raw transcript (\(transcript.count) chars)")
             voiceHUD.hide()
-            finishAndInject(transcript)
+            let formatted = TranscriptNumberFormatter.format(transcript)
+            finishAndInject(formatted)
+            UsageStatsStore.shared.record(chars: formatted.count, durationMs: durationMs)
             return
         }
         let providerTag = provider == .apple ? "Apple" : "Gemini"
@@ -522,18 +546,26 @@ final class InputController: NSObject {
                 switch result {
                 case .success(let polished):
                     // Post-polish safety net: re-run the dojo correction table so terms
-                    // the LLM missed or "normalized away" (發願→發愿 etc.) are restored.
+                    // the LLM missed or "normalized away" (發願→發愿 etc.) are restored,
+                    // then the deterministic number formatter (百分之三十五→35% etc.) as a
+                    // belt-and-suspenders backstop to the prompt's number rules.
                     let dojoMode = UserDefaults.standard.bool(forKey: "com.inputsa.dojoMode")
-                    let final = DojoCorrectionTable.shared.correct(polished, dojoMode: dojoMode)
+                    let corrected = DojoCorrectionTable.shared.correct(polished, dojoMode: dojoMode)
+                    let final = TranscriptNumberFormatter.format(corrected)
                     let newlines = final.filter { $0 == "\n" }.count
                     self.debugLog("polish OK (\(transcript.count) → \(final.count) chars, \(newlines) newlines)")
                     self.debugLog("polish out: \(String(final.prefix(120)))")
                     self.finishAndInject(final)
+                    UsageStatsStore.shared.record(chars: final.count, durationMs: durationMs)
                 case .failure(let err):
                     // Fall back to the raw transcript, but tell the user polish didn't run —
                     // silent fallback made key/network failures look like a formatting bug.
+                    // The deterministic number pass still applies (it's the whole reason it
+                    // exists as a rules layer: it must protect the raw-transcript fallback too).
                     self.debugLog("polish FAILED: \(err.localizedDescription) — injecting raw transcript")
-                    self.finishAndInject(transcript)
+                    let fallback = TranscriptNumberFormatter.format(transcript)
+                    self.finishAndInject(fallback)
+                    UsageStatsStore.shared.record(chars: fallback.count, durationMs: durationMs)
                     self.notifyPolishFailure(err.localizedDescription)
                 }
             }
@@ -641,19 +673,68 @@ final class InputController: NSObject {
     }
 
     // MARK: - Text Injection via AXUIElement
+
+    /// Deep copy of the user's clipboard captured before an injection, restored
+    /// ~300 ms after paste. Held across consecutive injections so a rapid second
+    /// paste doesn't overwrite the snapshot with the *first* injected text.
+    private var savedClipboardItems: [NSPasteboardItem]?
+    /// Bumped per injection so only the latest scheduled restore runs.
+    private var clipboardRestoreToken = 0
+
     private func injectText(_ text: String) {
         // Inject via clipboard + Cmd+V — the only reliably cross-app insertion method.
         // AXUIElementSetAttributeValue(kAXSelectedText:) returns .success on many apps
         // (Safari address bar, Electron, some native fields) WITHOUT actually inserting
         // the text, so it can never be trusted as a primary path and is not used here.
-        // TODO(P2): back up the previous clipboard contents and restore them after pasting
-        //           (needs a short delay so Cmd+V reads the value before it is restored).
         recordingTargetElement = nil
         let pb = NSPasteboard.general
+
+        // Snapshot the current clipboard (all items, all types) before overwriting.
+        // Only when no restore is already pending, so back-to-back injections keep
+        // the ORIGINAL contents rather than snapshotting the previous injected text.
+        if savedClipboardItems == nil {
+            savedClipboardItems = Self.snapshotPasteboard(pb)
+        }
+
         pb.clearContents()
         pb.setString(text, forType: .string)
         pasteViaCmdV()
         NSLog("[InputSa] injectText: pasted via Cmd+V (\(text.count) chars)")
+
+        // Restore the original clipboard after Cmd+V has had time to read it.
+        clipboardRestoreToken += 1
+        let token = clipboardRestoreToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self = self, token == self.clipboardRestoreToken else { return }
+            let items = self.savedClipboardItems
+            self.savedClipboardItems = nil
+            Self.restorePasteboard(items, to: NSPasteboard.general)
+        }
+    }
+
+    /// Deep-copy every item on the pasteboard. NSPasteboardItem instances can't be
+    /// reused across `clearContents()`, so each type's raw data is copied into a
+    /// fresh item that survives the injection.
+    private static func snapshotPasteboard(_ pb: NSPasteboard) -> [NSPasteboardItem] {
+        guard let items = pb.pasteboardItems else { return [] }
+        return items.map { original in
+            let copy = NSPasteboardItem()
+            for type in original.types {
+                if let data = original.data(forType: type) {
+                    copy.setData(data, forType: type)
+                }
+            }
+            return copy
+        }
+    }
+
+    /// Write the snapshot back. An empty/nil snapshot means the clipboard was
+    /// originally empty — clear it back to empty rather than leaving injected text.
+    private static func restorePasteboard(_ items: [NSPasteboardItem]?, to pb: NSPasteboard) {
+        pb.clearContents()
+        if let items, !items.isEmpty {
+            pb.writeObjects(items)
+        }
     }
 
     /// Simulate Cmd+V to paste from clipboard. Text must already be in NSPasteboard before calling.
