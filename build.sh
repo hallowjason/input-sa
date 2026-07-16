@@ -43,6 +43,7 @@ SOURCES=(
     "$SRC/AIServices/SherpaVoiceService.swift"
     "$SRC/AIServices/OpenCCConverter.swift"
     "$SRC/AIServices/DojoCorrectionTable.swift"
+    "$SRC/AIServices/DojoSharedSync.swift"
     "$SRC/AIServices/GeminiPolishService.swift"
     "$SRC/AIServices/ApplePolishService.swift"
     "$SRC/AIServices/AudioLevelMeter.swift"
@@ -51,7 +52,6 @@ SOURCES=(
     "$SRC/UI/PixelGuanyinRenderer.swift"
     "$SRC/UI/HUDCharacter.swift"
     "$SRC/UI/DesignTokens.swift"
-    "$SRC/UI/PillTabBar.swift"
     "$SRC/UI/PillSegmentedControl.swift"
     "$SRC/UI/CardListView.swift"
     "$SRC/UI/WaveformView.swift"
@@ -59,7 +59,12 @@ SOURCES=(
     "$SRC/UI/PolishPreviewController.swift"
     "$SRC/Preferences/ShortcutRecorderView.swift"
     "$SRC/Preferences/EditorSheets.swift"
+    "$SRC/Preferences/PreferencesSidebar.swift"
     "$SRC/Preferences/PreferencesWindowController.swift"
+    "$SRC/Preferences/PreferencesVoiceServiceTab.swift"
+    "$SRC/Preferences/PreferencesShortcutsTab.swift"
+    "$SRC/Preferences/PreferencesModesTab.swift"
+    "$SRC/Preferences/PreferencesDojoTab.swift"
 )
 
 # Create bundle structure

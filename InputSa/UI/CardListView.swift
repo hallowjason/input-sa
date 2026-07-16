@@ -1,21 +1,29 @@
 import AppKit
 
-/// Card-style list replacing NSTableView for the Custom-AI-Modes and Dojo-Vocabulary
-/// tabs — one rounded card per entry (icon circle / title / badge pills), the
-/// "transaction list" pattern from the reference visual language, instead of a
-/// native header-and-gridlines table.
+/// Flat grouped list for the AI-modes and dojo-vocabulary panes — one 48-pt
+/// row per entry with hairline separators, meant to sit INSIDE a
+/// `DesignTokens.groupCard` (it draws no card chrome of its own). Monochrome
+/// throughout: emoji/character tiles on a recessed well, badges by fill depth.
 ///
-/// Interaction: hovering a card crossfades its badge pills into 編輯/刪除 pill
-/// buttons *in the same spot* — an alpha swap, deliberately not isHidden toggling,
-/// so nothing reflows under the cursor.
+/// Interaction: hovering an editable row tints it with the well colour and
+/// crossfades its badges into 編輯/刪除 text buttons *in the same spot* — an
+/// alpha swap, deliberately not isHidden toggling, so nothing reflows under
+/// the cursor.
+///
+/// Height: hugs its content (rows × 48) up to `maxHeight`, then scrolls —
+/// grouped cards in the System Settings register never reserve dead space.
 final class CardListView: NSView {
 
     struct Row {
-        let iconText: String        // single char or emoji drawn in the leading circle
-        let iconFill: NSColor       // circle fill behind iconText
+        /// Single char or emoji drawn in a leading rounded tile; nil = no tile
+        /// (the dojo list is text-first, the modes list keeps its emoji).
+        var icon: String? = nil
         let title: NSAttributedString
         let subtitle: String        // secondary line under the title; "" hides it
-        let badges: [(text: String, fill: NSColor, textColor: NSColor)]
+        let badges: [(text: String, style: DesignTokens.BadgeStyle)]
+        /// Read-only rows (e.g. community-synced shared entries) show no 編輯/刪除
+        /// buttons and keep their badges permanently visible — no hover crossfade.
+        var isReadOnly: Bool = false
     }
 
     var onEdit: ((Int) -> Void)?
@@ -26,14 +34,18 @@ final class CardListView: NSView {
     private let scroll = NSScrollView()
     private let stack = FlippedStackContainer()
     private let emptyLabel = NSTextField(wrappingLabelWithString: "")
+    private let maxHeight: CGFloat
+    private var heightConstraint: NSLayoutConstraint!
 
-    private let listHeight: CGFloat
+    private static let rowHeight: CGFloat = 48
+    private static let emptyHeight: CGFloat = 64
 
-    init(height: CGFloat) {
-        self.listHeight = height
+    init(maxHeight: CGFloat) {
+        self.maxHeight = maxHeight
         super.init(frame: .zero)
 
         scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         scroll.translatesAutoresizingMaskIntoConstraints = false
@@ -41,20 +53,21 @@ final class CardListView: NSView {
         stack.translatesAutoresizingMaskIntoConstraints = false
         scroll.documentView = stack
 
-        emptyLabel.font = DesignTokens.monoFont(11)
-        emptyLabel.textColor = .tertiaryLabelColor
+        emptyLabel.font = DesignTokens.uiFont(11)
+        emptyLabel.textColor = DesignTokens.Palette.inkMuted(0.4)
         emptyLabel.alignment = .center
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(scroll)
         addSubview(emptyLabel)
+        heightConstraint = heightAnchor.constraint(equalToConstant: Self.emptyHeight)
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: listHeight),
+            heightConstraint,
             scroll.topAnchor.constraint(equalTo: topAnchor),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
-            // Document width follows the scroll viewport so cards never scroll sideways.
+            // Document width follows the scroll viewport so rows never scroll sideways.
             stack.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
             stack.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
@@ -71,17 +84,27 @@ final class CardListView: NSView {
         emptyLabel.stringValue = rows.isEmpty ? emptyStateText : ""
         emptyLabel.isHidden = !rows.isEmpty
         for (idx, row) in rows.enumerated() {
-            let card = CardRowView(row: row)
-            card.onEdit = { [weak self] in self?.onEdit?(idx) }
-            card.onDelete = { [weak self] in self?.onDelete?(idx) }
-            stack.arrangedStack.addArrangedSubview(card)
-            card.widthAnchor.constraint(equalTo: stack.arrangedStack.widthAnchor).isActive = true
+            if idx > 0 {
+                let sep = DesignTokens.hairline()
+                stack.arrangedStack.addArrangedSubview(sep)
+                sep.widthAnchor.constraint(equalTo: stack.arrangedStack.widthAnchor).isActive = true
+            }
+            let rowView = EntryRowView(row: row)
+            rowView.onEdit = { [weak self] in self?.onEdit?(idx) }
+            rowView.onDelete = { [weak self] in self?.onDelete?(idx) }
+            stack.arrangedStack.addArrangedSubview(rowView)
+            rowView.widthAnchor.constraint(equalTo: stack.arrangedStack.widthAnchor).isActive = true
         }
+        // Hug the content, cap at maxHeight (then scroll).
+        let contentHeight = rows.isEmpty
+            ? Self.emptyHeight
+            : CGFloat(rows.count) * Self.rowHeight + CGFloat(max(0, rows.count - 1))
+        heightConstraint.constant = min(contentHeight, maxHeight)
     }
 }
 
 /// NSScrollView documents anchor to the *bottom* for non-flipped views — this
-/// wrapper flips coordinates so the card stack grows downward from the top,
+/// wrapper flips coordinates so the row stack grows downward from the top,
 /// and forwards its arranged list through `arrangedStack`.
 private final class FlippedStackContainer: NSView {
     let arrangedStack = NSStackView()
@@ -90,9 +113,8 @@ private final class FlippedStackContainer: NSView {
     init() {
         super.init(frame: .zero)
         arrangedStack.orientation = .vertical
-        arrangedStack.spacing = 8
+        arrangedStack.spacing = 0
         arrangedStack.alignment = .leading
-        arrangedStack.edgeInsets = NSEdgeInsets(top: 2, left: 2, bottom: 2, right: 2)
         arrangedStack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(arrangedStack)
         NSLayoutConstraint.activate([
@@ -105,30 +127,32 @@ private final class FlippedStackContainer: NSView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-/// One rounded entry card. Fixed height; hover crossfades badges ↔ action buttons.
-private final class CardRowView: NSView {
+/// One flat list row. Fixed height; hover tints + crossfades badges ↔ actions.
+private final class EntryRowView: NSView {
     var onEdit: (() -> Void)?
     var onDelete: (() -> Void)?
 
     private let badgeStack = NSStackView()
     private let actionStack = NSStackView()
     private var tracking: NSTrackingArea?
+    private var isReadOnly = false
+    private var hovering = false
 
-    private static let rowHeight: CGFloat = 52
+    private static let rowHeight: CGFloat = 48
 
     init(row: CardListView.Row) {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 12
-        layer?.borderWidth = 1
-        updateCardColors()
+        isReadOnly = row.isReadOnly
 
-        // Leading icon circle — initial-letter avatar per the placeholder philosophy.
-        let icon = IconCircle(text: row.iconText, fill: row.iconFill)
+        var leading: [NSView] = []
+        if let icon = row.icon {
+            leading.append(WellTile(text: icon))
+        }
 
         // Attributed values override the field's own lineBreakMode — bake the
         // truncation into a paragraph style or the label wraps to two lines
-        // inside the fixed-height card.
+        // inside the fixed-height row.
         let truncating = NSMutableParagraphStyle()
         truncating.lineBreakMode = .byTruncatingTail
         let titleText = NSMutableAttributedString(attributedString: row.title)
@@ -145,8 +169,8 @@ private final class CardRowView: NSView {
         textStack.spacing = 2
         if !row.subtitle.isEmpty {
             let subtitleLabel = NSTextField(labelWithString: row.subtitle)
-            subtitleLabel.font = DesignTokens.monoFont(10)
-            subtitleLabel.textColor = .secondaryLabelColor
+            subtitleLabel.font = DesignTokens.uiFont(11)
+            subtitleLabel.textColor = DesignTokens.Palette.inkMuted(0.55)
             subtitleLabel.lineBreakMode = .byTruncatingTail
             subtitleLabel.maximumNumberOfLines = 1
             subtitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -157,24 +181,28 @@ private final class CardRowView: NSView {
         badgeStack.orientation = .horizontal
         badgeStack.spacing = 5
         for badge in row.badges {
-            badgeStack.addArrangedSubview(BadgePill(text: badge.text, fill: badge.fill, textColor: badge.textColor))
+            badgeStack.addArrangedSubview(DesignTokens.badge(badge.text, style: badge.style))
         }
 
-        let editBtn = makeActionButton(title: "編輯", fill: DesignTokens.accentGold, textColor: .black,
-                                       action: #selector(editTapped))
-        let delBtn = makeActionButton(title: "刪除", fill: NSColor.systemRed.withAlphaComponent(0.85),
-                                      textColor: .white, action: #selector(deleteTapped))
-        actionStack.orientation = .horizontal
-        actionStack.spacing = 5
-        actionStack.addArrangedSubview(editBtn)
-        actionStack.addArrangedSubview(delBtn)
-        actionStack.alphaValue = 0
+        // Read-only rows (shared entries) have no edit/delete actions; the badge
+        // stack simply stays visible (no hover crossfade set up below).
+        if !row.isReadOnly {
+            let editBtn = AccentTextButton(title: "編輯", symbol: nil, destructive: false,
+                                           target: self, action: #selector(editTapped))
+            let delBtn = AccentTextButton(title: "刪除", symbol: nil, destructive: true,
+                                          target: self, action: #selector(deleteTapped))
+            actionStack.orientation = .horizontal
+            actionStack.spacing = 2
+            actionStack.addArrangedSubview(editBtn)
+            actionStack.addArrangedSubview(delBtn)
+            actionStack.alphaValue = 0
+        }
 
-        let content = NSStackView(views: [icon, textStack, NSView(), badgeStack])
+        let content = NSStackView(views: leading + [textStack, NSView(), badgeStack])
         content.orientation = .horizontal
-        content.spacing = 10
+        content.spacing = 11
         content.alignment = .centerY
-        content.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
+        content.edgeInsets = NSEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)
         content.translatesAutoresizingMaskIntoConstraints = false
         addSubview(content)
         // Actions float over the badges' spot (same trailing edge) for the alpha crossfade.
@@ -193,35 +221,19 @@ private final class CardRowView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    /// Layer colors don't auto-track appearance changes the way NSColor-backed
-    /// drawing does — resolve them under the current effectiveAppearance.
+    /// Layer colors don't auto-track appearance changes — resolve under the
+    /// current effectiveAppearance.
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        updateCardColors()
+        applyBackground()
     }
 
-    private func updateCardColors() {
+    private func applyBackground() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-            layer?.borderColor = NSColor.separatorColor.cgColor
+            layer?.backgroundColor = hovering && !isReadOnly
+                ? DesignTokens.Palette.well.cgColor
+                : NSColor.clear.cgColor
         }
-    }
-
-    private func makeActionButton(title: String, fill: NSColor, textColor: NSColor,
-                                  action: Selector) -> NSButton {
-        let btn = NSButton(title: title, target: self, action: action)
-        btn.isBordered = false
-        btn.wantsLayer = true
-        btn.layer?.backgroundColor = fill.cgColor
-        btn.layer?.cornerRadius = 11
-        btn.attributedTitle = NSAttributedString(string: title, attributes: [
-            .font: DesignTokens.monoFont(10, weight: .bold),
-            .foregroundColor: textColor,
-        ])
-        btn.translatesAutoresizingMaskIntoConstraints = false
-        btn.heightAnchor.constraint(equalToConstant: 22).isActive = true
-        btn.widthAnchor.constraint(greaterThanOrEqualToConstant: 46).isActive = true
-        return btn
     }
 
     @objc private func editTapped() { onEdit?() }
@@ -229,7 +241,9 @@ private final class CardRowView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let t = tracking { removeTrackingArea(t) }
+        if let t = tracking { removeTrackingArea(t); tracking = nil }
+        // Read-only rows have no hover interaction — badges stay visible.
+        guard !isReadOnly else { return }
         let t = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow],
                                owner: self, userInfo: nil)
         addTrackingArea(t)
@@ -239,76 +253,95 @@ private final class CardRowView: NSView {
     override func mouseEntered(with event: NSEvent) { setHover(true) }
     override func mouseExited(with event: NSEvent) { setHover(false) }
 
-    private func setHover(_ hovering: Bool) {
+    private func setHover(_ h: Bool) {
+        hovering = h
+        applyBackground()
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.15
-            badgeStack.animator().alphaValue = hovering ? 0 : 1
-            actionStack.animator().alphaValue = hovering ? 1 : 0
+            badgeStack.animator().alphaValue = h ? 0 : 1
+            actionStack.animator().alphaValue = h ? 1 : 0
         }
     }
 }
 
-/// Solid-fill circle with a single centered character — the initial-letter
-/// avatar used as each card's leading icon.
-private final class IconCircle: NSView {
+/// 28-pt rounded well tile with a single centered character/emoji — the
+/// modes list's leading icon (monochrome chrome, the glyph supplies any hue).
+private final class WellTile: NSView {
     private let text: String
-    private let fill: NSColor
-    private static let diameter: CGFloat = 32
+    private static let side: CGFloat = 28
 
-    init(text: String, fill: NSColor) {
+    init(text: String) {
         self.text = text
-        self.fill = fill
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: Self.diameter),
-            heightAnchor.constraint(equalToConstant: Self.diameter),
+            widthAnchor.constraint(equalToConstant: Self.side),
+            heightAnchor.constraint(equalToConstant: Self.side),
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
 
     override func draw(_ dirtyRect: NSRect) {
-        fill.setFill()
-        NSBezierPath(ovalIn: bounds).fill()
+        DesignTokens.Palette.well.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
         let str = NSAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
-            .foregroundColor: NSColor.white,
+            .font: NSFont.systemFont(ofSize: 14),
+            .foregroundColor: DesignTokens.Palette.ink,
         ])
         let size = str.size()
         str.draw(at: NSPoint(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2))
     }
 }
 
-/// Small solid pill label — tier / phonetic markers on a card's trailing edge,
-/// also reused as the key-cap glyphs in the shortcut overview (internal, not
-/// private, for exactly that reuse).
+/// Small solid pill/chip label — monochrome badges on a row's trailing edge,
+/// also the key-cap chips in the shortcut overview (internal, not private,
+/// for exactly that reuse). Defaults preserve the HUD's original pill call
+/// (`fill`/`textColor`/`fontSize`/`height`/`mono`); the newer parameters add
+/// square-ish corners, hairline borders and lighter weights for the
+/// Preferences chips.
 final class BadgePill: NSView {
     private let text: String
     private let fill: NSColor
     private let textColor: NSColor
     private let font: NSFont
     private let pillHeight: CGFloat
+    private let cornerRadius: CGFloat?
+    private let borderColor: NSColor?
 
     init(text: String, fill: NSColor, textColor: NSColor,
-         fontSize: CGFloat = 9, height: CGFloat = 20) {
+         fontSize: CGFloat = 10, height: CGFloat = 21, mono: Bool = false,
+         cornerRadius: CGFloat? = nil, borderColor: NSColor? = nil,
+         hPad: CGFloat = 18, fontWeight: NSFont.Weight = .bold) {
         self.text = text
         self.fill = fill
         self.textColor = textColor
-        self.font = DesignTokens.monoFont(fontSize, weight: .bold)
+        self.font = mono ? DesignTokens.monoFont(fontSize, weight: fontWeight)
+                         : DesignTokens.uiFont(fontSize, weight: fontWeight)
         self.pillHeight = height
+        self.cornerRadius = cornerRadius
+        self.borderColor = borderColor
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         let size = NSAttributedString(string: text, attributes: [.font: font]).size()
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: size.width + 16),
+            widthAnchor.constraint(equalToConstant: size.width + hPad),
             heightAnchor.constraint(equalToConstant: pillHeight),
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
 
     override func draw(_ dirtyRect: NSRect) {
+        let radius = cornerRadius ?? bounds.height / 2
+        let path = NSBezierPath(roundedRect: borderColor == nil
+                                    ? bounds : bounds.insetBy(dx: 0.5, dy: 0.5),
+                                xRadius: radius, yRadius: radius)
         fill.setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2).fill()
+        path.fill()
+        if let borderColor {
+            borderColor.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
         let str = NSAttributedString(string: text, attributes: [
             .font: font, .foregroundColor: textColor,
         ])

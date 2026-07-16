@@ -1,17 +1,15 @@
 import AppKit
 
-/// Custom hand-drawn segmented control replacing NSSegmentedControl's native
-/// (system-blue) selection chrome — a light capsule track with a solid gold
-/// pill marking the active option. Used for the transcription-provider picker.
+/// Custom hand-drawn segmented control — a soft ink-tinted capsule track with
+/// a solid ink pill marking the active option (the reference sheet's black
+/// "VISA" register: selection is always ink, never a hue). Used for the
+/// transcription-provider and polish-provider pickers.
 final class PillSegmentedControl: NSView {
     private let labels: [String]
     private(set) var selectedIndex: Int
     var onSelect: ((Int) -> Void)?
 
     private var segmentFrames: [NSRect] = []
-
-    private let selectedFill = DesignTokens.accentGold
-    private let selectedTextColor = NSColor.black
 
     init(labels: [String], selectedIndex: Int = 0) {
         self.labels = labels
@@ -22,7 +20,7 @@ final class PillSegmentedControl: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: 36)
+        NSSize(width: NSView.noIntrinsicMetric, height: 38)
     }
 
     func select(_ index: Int) {
@@ -34,7 +32,7 @@ final class PillSegmentedControl: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         let bounds = self.bounds
-        NSColor.quaternaryLabelColor.withAlphaComponent(0.4).setFill()
+        DesignTokens.Palette.ink.withAlphaComponent(0.07).setFill()
         NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2).fill()
 
         let count = labels.count
@@ -50,13 +48,13 @@ final class PillSegmentedControl: NSView {
             let frame = segmentFrames[i]
             let textColor: NSColor
             if i == selectedIndex {
-                selectedFill.setFill()
+                DesignTokens.Palette.ink.setFill()
                 NSBezierPath(roundedRect: frame, xRadius: frame.height / 2, yRadius: frame.height / 2).fill()
-                textColor = selectedTextColor
+                textColor = DesignTokens.Palette.inkInverse
             } else {
-                textColor = .secondaryLabelColor
+                textColor = DesignTokens.Palette.inkMuted(0.6)
             }
-            var font = DesignTokens.monoFont(11, weight: .semibold)
+            var font = DesignTokens.uiFont(12, weight: .semibold)
             var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: textColor]
             var str = NSAttributedString(string: label, attributes: attrs)
             var size = str.size()
@@ -64,7 +62,7 @@ final class PillSegmentedControl: NSView {
             // Long labels ("Google STT（含台語）") can overflow a narrow segment —
             // step the font down rather than clipping or wrapping mid-word.
             if size.width > maxWidth {
-                font = DesignTokens.monoFont(9, weight: .semibold)
+                font = DesignTokens.uiFont(10, weight: .semibold)
                 attrs[.font] = font
                 str = NSAttributedString(string: label, attributes: attrs)
                 size = str.size()

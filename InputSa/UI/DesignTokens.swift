@@ -1,203 +1,325 @@
 import AppKit
 
-/// Shared visual constants so the Preferences window and the voice HUD read
-/// as one product instead of two unrelated AppKit surfaces. Preferences
-/// previously had no shared style source — every box/spacing value was a
-/// magic number picked ad hoc per tab.
+/// Shared visual constants for the Preferences window (plus the handful of
+/// legacy names the voice HUD and editor sheets depend on).
+///
+/// Design system (2026-07-16 redesign v3, "Apple"):
+/// the layout skeleton is macOS System Settings — a sidebar plus grouped
+/// white-card rows — and the visual discipline is apple.com's: a neutral
+/// #f5f5f7 canvas, near-black ink, hairline separators, and exactly ONE
+/// chromatic accent (Apple Blue #0071e3) reserved for interactive elements.
+/// Status dots (green/orange) are semantic state colours, not decoration;
+/// everything else is monochrome. No gradients, no borders except hairlines,
+/// no colour-coded badges — hierarchy comes from fill depth, not hue.
 enum DesignTokens {
-    /// Warm gold accent — matches the HUD's particle/waveform color, reused
-    /// here so Preferences doesn't feel visually disconnected from the HUD.
+    /// Warm gold accent — the HUD's particle/waveform colour. Preferences no
+    /// longer uses it anywhere; kept solely for VoiceHUDController.
     static let accentGold = NSColor(red: 0.93, green: 0.76, blue: 0.38, alpha: 1.0)
 
-    static let panelCornerRadius: CGFloat = 8
-    static let cardCornerRadius: CGFloat = 18
-    static let calloutHeight: CGFloat = 44
+    // MARK: - Colour primitives
 
-    enum Spacing {
-        static let section: CGFloat = 16   // outer edge insets
-        static let item: CGFloat = 10       // between stacked controls
-        static let compact: CGFloat = 6     // between tightly related controls (buttons in a row)
-        static let field: CGFloat = 4        // between a field and its inline caption
-        static let card: CGFloat = 14        // between section cards, and inside a card's edges
+    private static func rgb(_ r: Int, _ g: Int, _ b: Int, _ a: CGFloat = 1) -> NSColor {
+        NSColor(srgbRed: CGFloat(r) / 255, green: CGFloat(g) / 255, blue: CGFloat(b) / 255,
+                alpha: a)
     }
 
-    /// Fixed label-column width shared by every `NSGridView` field row across
-    /// all four Preferences tabs — without this, each grid auto-sizes its
-    /// label column to its own longest string, so field inputs in different
-    /// tabs start at different X positions even though they look like the
-    /// same kind of row. Wide enough for "翻譯目標語言" / "HUD 神佛角色".
+    /// A colour that resolves light/dark per the current appearance — used for
+    /// CALayer fills (read `.cgColor` inside `performAsCurrentDrawingAppearance`).
+    static func dynamic(_ light: NSColor, _ dark: NSColor) -> NSColor {
+        NSColor(name: nil) { $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light }
+    }
+
+    // MARK: - Palette (apple.com discipline, System Settings surfaces)
+
+    enum Palette {
+        /// Window canvas behind the grouped cards.
+        static let canvas = dynamic(rgb(0xf5, 0xf5, 0xf7), rgb(0x1d, 0x1d, 0x20))
+        /// Grouped card surface.
+        static let card   = dynamic(.white, rgb(0x29, 0x29, 0x2c))
+        /// Primary text and solid monochrome fills.
+        static let ink    = dynamic(rgb(0x1d, 0x1d, 0x1f), rgb(0xf5, 0xf5, 0xf7))
+        /// Text on ink fills (filled badges, InkPillButton).
+        static let inkInverse = dynamic(.white, rgb(0x1d, 0x1d, 0x1f))
+
+        static func inkMuted(_ alpha: CGFloat = 0.55) -> NSColor { ink.withAlphaComponent(alpha) }
+
+        /// Row/card hairline separator.
+        static let sep = dynamic(rgb(0, 0, 0, 0.08), rgb(0xff, 0xff, 0xff, 0.09))
+        /// Alias kept for HairlineView call sites.
+        static var hairline: NSColor { sep }
+        /// Recessed monochrome well — key caps, emoji tiles, soft badges.
+        static let well = dynamic(rgb(0, 0, 0, 0.05), rgb(0xff, 0xff, 0xff, 0.09))
+
+        /// THE accent. Interactive elements only: selected sidebar item,
+        /// text buttons, links. Never for emphasis or decoration.
+        static let accent = rgb(0x00, 0x71, 0xe3)
+        /// Inline text links (slightly darker for text-level readability;
+        /// brighter on dark backgrounds).
+        static let link = dynamic(rgb(0x00, 0x66, 0xcc), rgb(0x29, 0x97, 0xff))
+        /// Destructive text buttons (刪除) — semantic red, Apple HIG.
+        static let destructive = dynamic(rgb(0xd7, 0x00, 0x15), rgb(0xff, 0x69, 0x61))
+
+        // Semantic status colours (dots and transient feedback only).
+        static let statusOK   = dynamic(rgb(0x24, 0x8a, 0x3d), rgb(0x32, 0xd7, 0x4b))
+        static let statusWarn = dynamic(rgb(0xc9, 0x51, 0x00), rgb(0xff, 0x9f, 0x0a))
+    }
+
+    // MARK: - Geometry
+
+    static let windowSize = NSSize(width: 780, height: 560)
+    static let sidebarWidth: CGFloat = 210
+    static let cardCornerRadius: CGFloat = 10
+    /// Horizontal padding of a content pane.
+    static let contentPadding: CGFloat = 28
+    /// Content column width inside a pane (window − sidebar − 2 × padding).
+    /// Single source of truth for every card/footnote width pin.
+    static let contentWidth: CGFloat = 780 - 210 - 2 * 28
+
+    enum Spacing {
+        static let section: CGFloat = 22   // between sibling groups in a pane
+        static let item: CGFloat = 10      // between stacked controls
+        static let compact: CGFloat = 6    // between tightly related controls
+        static let field: CGFloat = 4      // between a field and its inline caption
+        static let card: CGFloat = 14      // sheets: between grouped blocks
+    }
+
     enum Grid {
         static let labelColumnWidth: CGFloat = 120
         static let fieldColumnWidth: CGFloat = 280
     }
 
-    /// System monospace font — the "hardware device" reference look uses a
-    /// dot-matrix/monospace face throughout. SF Mono ships with macOS, so
-    /// this needs no bundled font file.
+    // MARK: - Typography
+    // SF Pro (+ PingFang TC for CJK) with subtle negative tracking at every
+    // size — apple.com tracks tight universally. Mono survives ONLY for
+    // hardware-flavoured strings: API keys and the editor sheets' fields.
+
+    static func uiFont(_ size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
+        .systemFont(ofSize: size, weight: weight)
+    }
+
     static func monoFont(_ size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
         .monospacedSystemFont(ofSize: size, weight: weight)
     }
 
-    /// Builds the tinted callout box used at the top of the API Keys and Voice
-    /// tabs (e.g. "目前使用: Groq Whisper", "長按右 ⌥ 說話"). Centralizing this
-    /// avoids each call site re-deriving fillColor/borderColor/cornerRadius by hand.
-    static func makeCalloutBox(text: String, tint: NSColor) -> (box: NSBox, label: NSTextField) {
-        let box = NSBox()
-        box.boxType = .custom
-        box.cornerRadius = panelCornerRadius
-        box.borderWidth = 1
-        box.fillColor = tint.withAlphaComponent(0.08)
-        box.borderColor = tint.withAlphaComponent(0.3)
-
-        let label = NSTextField(wrappingLabelWithString: text)
-        label.font = monoFont(12, weight: .medium)
-        label.textColor = tint
-        label.isSelectable = false
-        label.preferredMaxLayoutWidth = 440
-
-        let stack = NSStackView(views: [label])
-        stack.orientation = .horizontal
-        stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
-        box.contentView = stack
-
-        // NSBox (boxType: .custom) has no intrinsic content size to hug — without an
-        // explicit height it stretches arbitrarily in a vertical NSStackView with
-        // slack space (see prior in-file note this replaces, in two call sites).
-        box.translatesAutoresizingMaskIntoConstraints = false
-        box.heightAnchor.constraint(equalToConstant: calloutHeight).isActive = true
-
-        return (box, label)
-    }
-
-    /// A solid-fill badge — the "TODAY" / "EXERCISE" style flat color-block
-    /// label from the reference visual language, used for the active-provider
-    /// status line instead of a soft 8%-tint callout. Height is *not* fixed:
-    /// this text is a full sentence (unlike the reference's short captions),
-    /// so a locked `calloutHeight` clipped two-line text outside the pill
-    /// shape when it wrapped ("API" rendered below the box entirely) — same
-    /// class of bug as the section-card sizing issue, same fix (pin content
-    /// to the box with constraints instead of guessing a fixed height).
-    static func makeSolidBadge(text: String, fill: NSColor) -> (box: NSBox, label: NSTextField) {
-        let box = NSBox()
-        box.boxType = .custom
-        box.cornerRadius = panelCornerRadius + 4
-        box.borderWidth = 0
-        box.fillColor = fill
-
-        let label = NSTextField(wrappingLabelWithString: text)
-        label.font = monoFont(12, weight: .bold)
-        label.textColor = .white
-        label.isSelectable = false
-        // Deliberately wider than the box's own explicit width constraint (see
-        // makeAPIKeysTab's 456pt card width) — the box's real constraint should
-        // be what decides wrapping, not this guess. Set too tight here once
-        // already (420) and the text wrapped one word early ("API" orphaned
-        // outside the pill) even though the box itself rendered plenty wide.
-        label.preferredMaxLayoutWidth = 500
-
-        let stack = NSStackView(views: [label])
-        stack.orientation = .horizontal
-        stack.edgeInsets = NSEdgeInsets(top: 12, left: 18, bottom: 12, right: 18)
-        box.contentView = stack
-
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: box.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: box.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: box.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: box.bottomAnchor),
+    /// Single-line label with precise kerning.
+    static func styledLabel(_ text: String, size: CGFloat, weight: NSFont.Weight,
+                            kern: CGFloat = 0, color: NSColor) -> NSTextField {
+        let label = NSTextField(labelWithString: "")
+        label.attributedStringValue = NSAttributedString(string: text, attributes: [
+            .font: uiFont(size, weight: weight),
+            .kern: kern,
+            .foregroundColor: color,
         ])
-        box.translatesAutoresizingMaskIntoConstraints = false
-        box.setContentHuggingPriority(.required, for: .vertical)
-        stack.setContentHuggingPriority(.required, for: .vertical)
-
-        return (box, label)
+        return label
     }
 
-    /// A solid-fill pill button — replaces the system `.rounded` bezel look for
-    /// primary actions ("儲存設定"). `NSButton` with `isBordered = false` draws
-    /// no chrome of its own, so the gold fill + rounding is applied via layer.
-    static func makeSolidButton(title: String, target: AnyObject?, action: Selector,
-                                fill: NSColor = accentGold,
-                                textColor: NSColor = .black) -> NSButton {
+    /// Pane heading — "語音服務" at the top of a content pane.
+    static func paneTitle(_ text: String) -> NSTextField {
+        styledLabel(text, size: 22, weight: .semibold, kern: -0.35, color: Palette.ink)
+    }
+
+    /// Group heading above a card — 13 pt semibold ink, sentence case.
+    static func sectionLabel(_ text: String) -> NSTextField {
+        styledLabel(text, size: 13, weight: .semibold, kern: -0.2, color: Palette.ink)
+    }
+
+    /// Wrapping footnote under a card. 11 pt muted ink.
+    static func caption(_ text: String, width: CGFloat = contentWidth - 8) -> NSTextField {
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = uiFont(11)
+        label.textColor = Palette.inkMuted(0.55)
+        label.preferredMaxLayoutWidth = width
+        label.isSelectable = false
+        return label
+    }
+
+    /// 1-pt separator (rows inside a card, or standalone).
+    static func hairline() -> NSView {
+        let line = HairlineView()
+        line.translatesAutoresizingMaskIntoConstraints = false
+        line.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        return line
+    }
+
+    // MARK: - Grouped rows (the System Settings register)
+
+    /// One card row: 13 pt title (plus optional 11 pt subtitle) left,
+    /// control right. Min height 44, side insets 16.
+    static func row(title: String, subtitle: String? = nil, control: NSView? = nil) -> NSView {
+        let titleLabel = styledLabel(title, size: 13, weight: .regular, kern: -0.2,
+                                     color: Palette.ink)
+        titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let textStack = NSStackView(views: [titleLabel])
+        textStack.orientation = .vertical
+        textStack.alignment = .leading
+        textStack.spacing = 2
+        if let subtitle, !subtitle.isEmpty {
+            let sub = NSTextField(wrappingLabelWithString: subtitle)
+            sub.font = uiFont(11)
+            sub.textColor = Palette.inkMuted(0.55)
+            sub.preferredMaxLayoutWidth = 330
+            sub.isSelectable = false
+            textStack.addArrangedSubview(sub)
+        }
+        var views: [NSView] = [textStack]
+        if let control {
+            views.append(NSView())   // spring pushes the control to the trailing edge
+            views.append(control)
+        }
+        let row = NSStackView(views: views)
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 12
+        row.edgeInsets = NSEdgeInsets(top: 9, left: 16, bottom: 9, right: 16)
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        return row
+    }
+
+    /// Status row: caption left; green/orange dot + value right.
+    /// Returns the labels so change handlers can restyle text in place.
+    static func statusRow(caption: String, value: String, dot: NSColor)
+        -> (row: NSView, captionLabel: NSTextField, valueLabel: NSTextField,
+            dotView: StatusDotView) {
+        let captionLabel = styledLabel(caption, size: 13, weight: .regular, kern: -0.2,
+                                       color: Palette.ink)
+        let valueLabel = styledLabel(value, size: 12, weight: .medium, kern: -0.15,
+                                     color: Palette.ink)
+        let dotView = StatusDotView(color: dot)
+        let row = NSStackView(views: [captionLabel, NSView(), dotView, valueLabel])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+        row.setCustomSpacing(12, after: captionLabel)
+        row.edgeInsets = NSEdgeInsets(top: 9, left: 16, bottom: 9, right: 16)
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        return (row, captionLabel, valueLabel, dotView)
+    }
+
+    /// White grouped card stacking `rows` with hairline separators between.
+    /// Every row is pinned to the card's width, so rows can hide/show
+    /// (NSStackView collapses hidden arranged views) without leaving gaps.
+    ///
+    /// `autoSeparators: false` hands separator placement to the caller —
+    /// needed when some rows are conditional: a hidden row's auto-inserted
+    /// neighbour hairline would stay behind as a stray double line, so such
+    /// rows carry their own leading hairline inside their wrapper instead.
+    static func groupCard(_ rows: [NSView], autoSeparators: Bool = true) -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 0
+        for (i, rowView) in rows.enumerated() {
+            if autoSeparators && i > 0 { stack.addArrangedSubview(hairline()) }
+            stack.addArrangedSubview(rowView)
+        }
+        let card = GroupCardView()
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: card.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+        ])
+        for v in stack.arrangedSubviews {
+            v.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+        card.setContentHuggingPriority(.required, for: .vertical)
+        stack.setContentHuggingPriority(.required, for: .vertical)
+        return card
+    }
+
+    /// One pane group: optional 13-pt heading, the card, optional footnote.
+    /// The card is pinned to the group's width; the caller pins the group to
+    /// the pane's content column.
+    static func group(title: String? = nil, card: NSView,
+                      footnote: NSTextField? = nil) -> NSView {
+        var views: [NSView] = []
+        if let title { views.append(sectionLabel(title)) }
+        views.append(card)
+        if let footnote { views.append(footnote) }
+        let stack = NSStackView(views: views)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 7
+        card.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        return stack
+    }
+
+    // MARK: - Controls
+
+    /// Native macOS popup — the System Settings selector for 2+ choices.
+    static func popup(items: [String], selectedIndex: Int,
+                      target: AnyObject?, action: Selector) -> NSPopUpButton {
+        let popup = NSPopUpButton()
+        popup.addItems(withTitles: items)
+        if (0..<items.count).contains(selectedIndex) { popup.selectItem(at: selectedIndex) }
+        popup.target = target
+        popup.action = action
+        popup.font = uiFont(12)
+        popup.setContentHuggingPriority(.required, for: .horizontal)
+        return popup
+    }
+
+    /// Native push button (清除 etc.) — the stock rounded bezel IS the look.
+    static func pushButton(title: String, target: AnyObject?, action: Selector) -> NSButton {
         let btn = NSButton(title: title, target: target, action: action)
-        btn.isBordered = false
-        btn.wantsLayer = true
-        btn.layer?.backgroundColor = fill.cgColor
-        btn.layer?.cornerRadius = 17
-        btn.attributedTitle = solidButtonTitle(title, textColor: textColor)
-        btn.translatesAutoresizingMaskIntoConstraints = false
-        btn.heightAnchor.constraint(equalToConstant: 34).isActive = true
-        btn.widthAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
+        btn.bezelStyle = .rounded
+        btn.controlSize = .small
+        btn.font = uiFont(12)
         return btn
     }
 
-    /// Re-title a solid button without losing its pill styling (plain `title =`
-    /// resets the attributed string and drops the custom font/color).
-    static func solidButtonTitle(_ title: String, textColor: NSColor) -> NSAttributedString {
-        NSAttributedString(string: title, attributes: [
-            .font: monoFont(12, weight: .bold),
-            .foregroundColor: textColor,
-        ])
+    /// Accent text button — card-footer actions (＋ 新增詞條, 用說的新增).
+    static func textButton(title: String, symbol: String? = nil,
+                           target: AnyObject?, action: Selector) -> AccentTextButton {
+        AccentTextButton(title: title, symbol: symbol, destructive: false,
+                         target: target, action: action)
     }
 
-    /// A titled, flat-bordered section card — the container used to visually
-    /// separate distinct service groups (e.g. "語音轉錄服務" vs "AI 潤飾服務")
-    /// instead of a single thin `NSBox.separator` line between them. Deliberately
-    /// flat/matte (system control-background fill, hairline border), not glass —
-    /// this is the "hardware settings panel" register, distinct from the HUD's
-    /// liquid-glass "living assistant" register by design.
-    static func makeSectionCard(title: String) -> (box: NSBox, contentStack: NSStackView) {
-        let box = NSBox()
-        box.boxType = .custom
-        box.cornerRadius = cardCornerRadius
-        box.borderWidth = 1
-        box.fillColor = .controlBackgroundColor
-        box.borderColor = .separatorColor
-
-        let titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = monoFont(11, weight: .bold)
-        titleLabel.textColor = .secondaryLabelColor
-
-        let contentStack = NSStackView(views: [titleLabel])
-        contentStack.orientation = .vertical
-        contentStack.alignment = .leading
-        contentStack.spacing = Spacing.item
-        contentStack.edgeInsets = NSEdgeInsets(
-            top: Spacing.card, left: Spacing.card, bottom: Spacing.card, right: Spacing.card)
-
-        box.contentView = contentStack
-        // NSBox (boxType: .custom) has no intrinsic content size — unlike
-        // makeCalloutBox's fixed height, a section card's content is variable
-        // (segmented control + N field rows vs. a single field row), so instead
-        // of hardcoding a height, pin contentStack to all four edges of the box.
-        // That makes the box's size a direct *consequence* of contentStack's own
-        // well-defined intrinsic size, rather than something the box has to guess
-        // at (which is what produced the giant blank/overlapping cards).
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            contentStack.topAnchor.constraint(equalTo: box.topAnchor),
-            contentStack.leadingAnchor.constraint(equalTo: box.leadingAnchor),
-            contentStack.trailingAnchor.constraint(equalTo: box.trailingAnchor),
-            contentStack.bottomAnchor.constraint(equalTo: box.bottomAnchor),
-        ])
-        box.translatesAutoresizingMaskIntoConstraints = false
-        // Both box AND contentStack need required vertical hugging — since all
-        // four edges are pinned with *equal* constraints, box and contentStack
-        // are bound together as one unit, and that unit's size is only as
-        // "tight" as its *weaker* hugging side. Setting only one of the two
-        // (tried box alone first) still let the pair stretch to fill the tab's
-        // available height, because contentStack's own default-low priority
-        // was the side that gave way.
-        box.setContentHuggingPriority(.required, for: .vertical)
-        contentStack.setContentHuggingPriority(.required, for: .vertical)
-
-        return (box, contentStack)
+    /// Key-cap chip for the shortcut overview (右 ⌥, ⌃, P…).
+    static func keycap(_ text: String) -> BadgePill {
+        BadgePill(text: text, fill: Palette.well, textColor: Palette.inkMuted(0.65),
+                  fontSize: 11, height: 22, mono: false, cornerRadius: 5,
+                  borderColor: Palette.sep, hPad: 14, fontWeight: .medium)
     }
 
-    /// Builds a label/field `NSGridView` with the shared column widths applied —
-    /// the single source of truth for "does this field row align with every
-    /// other field row in Preferences," across all four tabs.
+    /// Monochrome list badge. Hierarchy by fill depth, never by hue.
+    enum BadgeStyle { case filled, soft, outline }
+
+    static func badge(_ text: String, style: BadgeStyle) -> BadgePill {
+        switch style {
+        case .filled:
+            return BadgePill(text: text, fill: Palette.ink, textColor: Palette.inkInverse,
+                             fontSize: 10, height: 20)
+        case .soft:
+            return BadgePill(text: text, fill: Palette.well,
+                             textColor: Palette.inkMuted(0.6), fontSize: 10, height: 20,
+                             fontWeight: .medium)
+        case .outline:
+            return BadgePill(text: text, fill: .clear, textColor: Palette.inkMuted(0.6),
+                             fontSize: 10, height: 20, borderColor: Palette.sep,
+                             fontWeight: .medium)
+        }
+    }
+
+    // MARK: - Legacy factories (editor sheets only — do not use in panes)
+
+    /// Solid ink pill — the sheets' 儲存 button.
+    static func inkButton(title: String, symbol: String? = nil,
+                          target: AnyObject?, action: Selector) -> InkPillButton {
+        InkPillButton(title: title, symbol: symbol, style: .solidInk,
+                      target: target, action: action)
+    }
+
+    /// Soft pill — ink at 8% with ink text.
+    static func softButton(title: String, symbol: String? = nil,
+                           target: AnyObject?, action: Selector) -> InkPillButton {
+        InkPillButton(title: title, symbol: symbol, style: .soft,
+                      target: target, action: action)
+    }
+
+    /// Label/field `NSGridView` with the shared column widths (editor sheets).
     static func makeFieldGrid(_ rows: [[NSView]]) -> NSGridView {
         let grid = NSGridView(views: rows)
         grid.rowSpacing = Spacing.field
@@ -207,33 +329,225 @@ enum DesignTokens {
         if grid.numberOfColumns > 1 {
             grid.column(at: 1).width = Grid.fieldColumnWidth
         }
-        // Without this, a vertical NSStackView with slack space (e.g. a card whose
-        // width is fixed wider than its tallest sibling needs) can stretch the grid's
-        // rows unevenly instead of leaving the grid at its natural fitting height —
-        // pin it to required-priority hugging so all extra space goes elsewhere.
+        // Without this, a vertical NSStackView with slack space can stretch the
+        // grid's rows unevenly instead of leaving it at natural fitting height.
         grid.setContentHuggingPriority(.required, for: .vertical)
         grid.setContentCompressionResistancePriority(.required, for: .vertical)
         return grid
     }
+}
 
-    /// Liquid-glass-style panel background, same technique as the voice HUD
-    /// (NSGlassEffectView .clear on macOS 26+, NSVisualEffectView fallback
-    /// below that) — kept as a separate implementation from the HUD's own
-    /// `makeGlassContainer` so this refactor doesn't touch already-verified
-    /// HUD rendering code.
-    static func makeGlassPanel(bounds: NSRect, content: NSView) -> NSView {
-        if #available(macOS 26.0, *) {
-            let glass = NSGlassEffectView(frame: bounds)
-            glass.cornerRadius = 0
-            glass.style = .clear
-            glass.contentView = content
-            return glass
+/// Grouped-card surface: card fill, 10-pt radius, hairline edge. Layer colours
+/// re-resolve on appearance changes (CALayer fills don't auto-track).
+final class GroupCardView: NSView {
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        translatesAutoresizingMaskIntoConstraints = false
+        layer?.cornerRadius = DesignTokens.cardCornerRadius
+        layer?.borderWidth = 1
+        applyColors()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyColors()
+    }
+    private func applyColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = DesignTokens.Palette.card.cgColor
+            layer?.borderColor = DesignTokens.Palette.sep.cgColor
         }
-        let v = NSVisualEffectView(frame: bounds)
-        v.material = .contentBackground
-        v.blendingMode = .behindWindow
-        v.state = .active
-        v.addSubview(content)
-        return v
+    }
+}
+
+/// Coordinate-flipped container so stacked content grows downward inside an
+/// NSScrollView (non-flipped documents anchor to the bottom).
+final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+/// 1-pt divider that re-resolves its tint on appearance changes.
+final class HairlineView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        applyColor()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyColor()
+    }
+    private func applyColor() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = DesignTokens.Palette.hairline.cgColor
+        }
+    }
+}
+
+/// 8-pt status dot; colour swaps via `setColor` (semantic state changes).
+final class StatusDotView: NSView {
+    private var color: NSColor
+    init(color: NSColor) {
+        self.color = color
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: 8),
+            heightAnchor.constraint(equalToConstant: 8),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    func setColor(_ c: NSColor) { color = c; needsDisplay = true }
+    override func draw(_ dirtyRect: NSRect) {
+        color.setFill()
+        NSBezierPath(ovalIn: bounds).fill()
+    }
+}
+
+/// Borderless accent-text button (blue link register). `setTitle` re-titles
+/// without losing the styling — the dojo voice-add button relies on that.
+final class AccentTextButton: NSButton {
+    private let symbol: String?
+    private let color: NSColor
+    private var titleText: String
+
+    init(title: String, symbol: String?, destructive: Bool,
+         target: AnyObject?, action: Selector) {
+        self.symbol = symbol
+        self.color = destructive ? DesignTokens.Palette.destructive
+                                 : DesignTokens.Palette.link
+        self.titleText = title
+        super.init(frame: .zero)
+        self.target = target
+        self.action = action
+        isBordered = false
+        setButtonType(.momentaryChange)
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(equalToConstant: 26).isActive = true
+        applyTitle()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func setTitle(_ newTitle: String) {
+        titleText = newTitle
+        applyTitle()
+        invalidateIntrinsicContentSize()
+    }
+
+    private func applyTitle() {
+        let text = NSMutableAttributedString()
+        if let symbol,
+           let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+               .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold)) {
+            let attach = NSTextAttachment()
+            attach.image = NSImage.tinted(img, color: color)
+            attach.bounds = NSRect(x: 0, y: -1.5, width: img.size.width, height: img.size.height)
+            text.append(NSAttributedString(attachment: attach))
+            text.append(NSAttributedString(string: " "))
+        }
+        text.append(NSAttributedString(string: titleText, attributes: [
+            .font: DesignTokens.uiFont(12, weight: .medium),
+            .foregroundColor: color,
+            .kern: -0.15,
+        ]))
+        attributedTitle = text
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyTitle()
+    }
+}
+
+extension NSImage {
+    /// Tint a template-ish image by baking colour into a copy — template
+    /// rendering inside attributed strings is unreliable pre-macOS 14.
+    static func tinted(_ image: NSImage, color: NSColor) -> NSImage {
+        let img = NSImage(size: image.size)
+        img.lockFocus()
+        color.set()
+        let rect = NSRect(origin: .zero, size: image.size)
+        image.draw(in: rect)
+        rect.fill(using: .sourceAtop)
+        img.unlockFocus()
+        return img
+    }
+}
+
+/// Pill button in the sheets' two registers: solid ink (primary) or soft
+/// ink-8% (secondary). Draws itself, so fills stay appearance-correct, and
+/// `setTitle` re-titles without losing the styling.
+final class InkPillButton: NSButton {
+    enum Style { case solidInk, soft }
+    private let style: Style
+    private let symbol: String?
+    private var titleText: String
+
+    init(title: String, symbol: String?, style: Style, target: AnyObject?, action: Selector) {
+        self.style = style
+        self.symbol = symbol
+        self.titleText = title
+        super.init(frame: .zero)
+        self.target = target
+        self.action = action
+        isBordered = false
+        wantsLayer = true
+        layer?.masksToBounds = true
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(equalToConstant: 34).isActive = true
+        applyTitle()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func setTitle(_ newTitle: String) {
+        titleText = newTitle
+        applyTitle()
+        invalidateIntrinsicContentSize()
+    }
+
+    private func applyTitle() {
+        let fg: NSColor = style == .solidInk
+            ? DesignTokens.Palette.inkInverse
+            : DesignTokens.Palette.ink
+        let text = NSMutableAttributedString()
+        if let symbol,
+           let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+               .withSymbolConfiguration(.init(pointSize: 11, weight: .bold)) {
+            let attach = NSTextAttachment()
+            attach.image = NSImage.tinted(img, color: fg)
+            attach.bounds = NSRect(x: 0, y: -2, width: img.size.width, height: img.size.height)
+            text.append(NSAttributedString(attachment: attach))
+            text.append(NSAttributedString(string: "  "))
+        }
+        text.append(NSAttributedString(string: titleText, attributes: [
+            .font: DesignTokens.uiFont(12, weight: .bold),
+            .foregroundColor: fg,
+            .kern: 0.2,
+        ]))
+        attributedTitle = text
+    }
+
+    override var intrinsicContentSize: NSSize {
+        var s = super.intrinsicContentSize
+        s.width += 30   // pill side padding
+        return s
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let fill: NSColor = style == .solidInk
+            ? DesignTokens.Palette.ink
+            : DesignTokens.Palette.ink.withAlphaComponent(0.08)
+        fill.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2,
+                     yRadius: bounds.height / 2).fill()
+        super.draw(dirtyRect)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyTitle()
+        needsDisplay = true
     }
 }
