@@ -245,7 +245,9 @@ final class InputController: NSObject {
         if type == .keyDown, let entry = pendingDojoEntry {
             pendingDojoEntry = nil
             if keyCode == kVKReturn {
-                confirmPendingDojoEntry(entry)
+                // Shift+Return = save locally AND share to the 共編詞庫; plain
+                // Return = save locally only (default, protects personal terms).
+                confirmPendingDojoEntry(entry, share: flags.contains(.maskShift))
                 return nil
             }
             if keyCode == kVKEscape {
@@ -388,27 +390,49 @@ final class InputController: NSObject {
             case .success(let entry):
                 self.pendingDojoEntry = entry
                 self.debugLog("dojo voice-add parsed: \(entry.wrong) → \(entry.correct)")
-                let detail = entry.wrong == entry.correct
-                    ? entry.correct
-                    : "\(entry.wrong) → \(entry.correct)"
-                self.voiceHUD.setState(.processing("加入詞庫「\(detail)」？　↩ 確認　⎋ 取消"))
+                self.voiceHUD.showDojoConfirm(correct: entry.correct, wrong: entry.wrong)
             }
         }
     }
 
-    private func confirmPendingDojoEntry(_ entry: DojoCorrectionTable.Entry) {
-        var entries = DojoCorrectionTable.shared.allEntries
+    /// Save the parsed entry to the personal table. When `share` is true, also
+    /// submit it to the 共編詞庫 for review — best-effort: a failed share never
+    /// affects the local save and never shows a modal.
+    private func confirmPendingDojoEntry(_ entry: DojoCorrectionTable.Entry, share: Bool = false) {
+        var entries = DojoCorrectionTable.shared.personalEntries
         let duplicate = entries.contains { $0.wrong == entry.wrong && $0.correct == entry.correct }
         if !duplicate { entries.append(entry) }
-        if duplicate || DojoCorrectionTable.shared.save(entries) {
-            debugLog("dojo voice-add saved: \(entry.wrong) → \(entry.correct)\(duplicate ? " (duplicate, skipped)" : "")")
-            voiceHUD.setState(.processing("✅ 已加入詞庫：\(entry.correct)"))
+        guard duplicate || DojoCorrectionTable.shared.save(entries) else {
+            voiceHUD.hide()
+            showError("詞庫寫入失敗，請確認磁碟空間或權限。")
+            return
+        }
+        debugLog("dojo voice-add saved: \(entry.wrong) → \(entry.correct)\(duplicate ? " (duplicate, skipped)" : "")")
+
+        guard share else {
+            voiceHUD.updateDojoConfirmMessage("✅ 已加入詞庫：\(entry.correct)")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
                 self?.voiceHUD.hide()
             }
-        } else {
-            voiceHUD.hide()
-            showError("詞庫寫入失敗，請確認磁碟空間或權限。")
+            return
+        }
+
+        // Local save is already committed above — sharing is purely additive.
+        voiceHUD.updateDojoConfirmMessage("✅ 已加入詞庫，分享中…")
+        DojoSharedSync.shared.submit(entry: entry) { [weak self] result in
+            guard let self = self else { return }
+            let msg: String
+            switch result {
+            case .success(.ok):        msg = "已送出待審核 ✓"
+            case .success(.duplicate): msg = "這條已有人分享過"
+            case .failure(let err):
+                self.debugLog("dojo share submit failed: \(err.localizedDescription)")
+                msg = "分享失敗，詞條已存在本機"
+            }
+            self.voiceHUD.updateDojoConfirmMessage(msg)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.voiceHUD.hide()
+            }
         }
     }
 

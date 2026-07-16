@@ -44,8 +44,22 @@ enum TranscriptionMode: Equatable {
     /// mis-recognition to them from context — no need to enumerate wrong forms.
     private var dojoVocabularySection: String {
         guard UserDefaults.standard.bool(forKey: "com.inputsa.dojoMode") else { return "" }
-        let terms = Array(Set(DojoCorrectionTable.shared.allEntries.map(\.correct))).sorted()
+        // Personal terms first, then shared — dedup preserving that order. The
+        // prompt is capped (below) so personal terms are the ones that survive
+        // truncation.
+        let table = DojoCorrectionTable.shared
+        var seen = Set<String>()
+        var terms: [String] = []
+        for correct in (table.personalEntries + table.sharedEntries).map(\.correct)
+        where seen.insert(correct).inserted {
+            terms.append(correct)
+        }
         guard !terms.isEmpty else { return "" }
+        // Cap the injected list: a growing 共編詞庫 must not blow past Apple's
+        // on-device ~4096-token prompt window. Terms beyond the cap still take
+        // effect in the string-replacement layer (`correct()`) — they're just
+        // not enumerated in the prompt.
+        if terms.count > 80 { terms = Array(terms.prefix(80)) }
         return """
 
         領域詞彙表（道場用語）：\(terms.joined(separator: "、"))

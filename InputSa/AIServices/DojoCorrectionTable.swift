@@ -58,22 +58,46 @@ final class DojoCorrectionTable {
     private static let alwaysTier = "always"
     private static let dojoOnlyTier = "dojoOnly"
 
-    /// Entries sorted by `wrong` length, longest first (substring-safe ordering).
+    // Two independent sources, kept separate so the editor can never write shared
+    // entries back into the personal file (see `personalEntries` / `save`):
+    //   • `_personal` — the user's own dojo_corrections.json (editable)
+    //   • `_shared`   — the community-synced dojo_shared.json (read-only cache)
+    // `entries` is their merge (personal wins on collision), sorted longest-first,
+    // and is the *only* table `correct()` consults.
+    private var _personal: [Entry]
+    private var _shared: [Entry]
+    /// Effective correction table: merged personal + shared, longest-`wrong`-first.
     private var entries: [Entry]
+
+    /// The user's own entries — the source the Preferences editor reads and writes.
+    /// Never includes shared entries, so saving the editor's list back can't
+    /// pollute the personal file with community entries.
+    var personalEntries: [Entry] { _personal }
+
+    /// Community-synced entries — read-only, shown in the UI but not editable
+    /// (to override one, the user adds a personal entry with the same `wrong`).
+    var sharedEntries: [Entry] { _shared }
 
     static let shared = DojoCorrectionTable()
 
     // MARK: - Init
 
-    /// Designated initializer. Entries are stored longest-`wrong`-first.
-    init(entries: [Entry]) {
-        self.entries = Self.sortedLongestFirst(entries)
+    /// Designated initializer.
+    init(personal: [Entry], shared: [Entry]) {
+        self._personal = personal
+        self._shared = shared
+        self.entries = Self.mergeAndSort(personal: personal, shared: shared)
     }
 
-    /// Production initializer — loads from Application Support (seeding from the
-    /// bundle on first run). Falls back to an empty table on any failure.
+    /// Personal-only convenience (used by unit tests): no shared source.
+    convenience init(entries: [Entry]) {
+        self.init(personal: entries, shared: [])
+    }
+
+    /// Production initializer — loads the personal file (seeding from the bundle
+    /// on first run) plus the shared cache. Falls back to empty on any failure.
     convenience init() {
-        self.init(entries: Self.loadEntries())
+        self.init(personal: Self.loadPersonalEntries(), shared: Self.loadSharedEntries())
     }
 
     // MARK: - Correction
@@ -93,18 +117,19 @@ final class DojoCorrectionTable {
         return result
     }
 
-    /// Reload entries from disk (for a future "apply edits now" UI action).
+    /// Reload both sources from disk. Called after an in-app edit or after
+    /// `DojoSharedSync` refreshes the shared cache.
     func reload() {
-        entries = Self.loadEntries()
+        _personal = Self.loadPersonalEntries()
+        _shared = Self.loadSharedEntries()
+        entries = Self.mergeAndSort(personal: _personal, shared: _shared)
     }
 
-    /// Current entries, longest-`wrong`-first — read-only snapshot for a management UI.
-    var allEntries: [Entry] { entries }
-
-    /// Replace the entire table: write `newEntries` to the Application Support
-    /// copy (creating it if absent) and apply them in-memory immediately.
-    /// Returns `false` on write failure (e.g. no Application Support directory),
-    /// in which case the in-memory table is left unchanged.
+    /// Replace the *personal* table: write `newEntries` to the Application Support
+    /// copy (creating it if absent) and re-merge in-memory immediately. Only ever
+    /// writes the personal file — shared entries are never persisted here.
+    /// Returns `false` on write failure, in which case the in-memory table is
+    /// left unchanged.
     @discardableResult
     func save(_ newEntries: [Entry]) -> Bool {
         guard let supportURL = Self.applicationSupportURL else { return false }
@@ -119,7 +144,8 @@ final class DojoCorrectionTable {
             NSLog("[InputSa] DojoCorrectionTable: save failed — \(error)")
             return false
         }
-        entries = Self.sortedLongestFirst(newEntries)
+        _personal = newEntries
+        entries = Self.mergeAndSort(personal: _personal, shared: _shared)
         return true
     }
 
@@ -135,6 +161,27 @@ final class DojoCorrectionTable {
 
     private static func sortedLongestFirst(_ entries: [Entry]) -> [Entry] {
         entries.sorted { $0.wrong.count > $1.wrong.count }
+    }
+
+    /// Merge personal + shared into the effective table. Personal wins: a shared
+    /// entry is dropped when its dedup key already exists in personal, so a user's
+    /// own entry always overrides a colliding community one. Result is
+    /// longest-`wrong`-first (substring-safe ordering) for `correct()`.
+    private static func mergeAndSort(personal: [Entry], shared: [Entry]) -> [Entry] {
+        let personalKeys = Set(personal.map(dedupKey))
+        var merged = personal
+        for entry in shared where !personalKeys.contains(dedupKey(entry)) {
+            merged.append(entry)
+        }
+        return sortedLongestFirst(merged)
+    }
+
+    /// Dedup key: a non-empty `wrong` (distinct from `correct`) keys on the
+    /// misheard form; otherwise (empty, or the wrong==correct "no mishearing"
+    /// convention) keys on `correct`. This collapses the two ways the same
+    /// correct term can be stored so personal correctly shadows shared.
+    private static func dedupKey(_ e: Entry) -> String {
+        (e.wrong.isEmpty || e.wrong == e.correct) ? "c:\(e.correct)" : "w:\(e.wrong)"
     }
 
     // MARK: - Pass 2: phonetic (pinyin) homophone matching
@@ -196,15 +243,37 @@ final class DojoCorrectionTable {
             .appendingPathComponent("dojo_corrections.json")
     }
 
+    /// Community-synced cache the sync layer writes (`dojo_shared.json`), same
+    /// directory and `{"entries":[...]}` shape as the personal file. Owned here
+    /// (not in DojoSharedSync) so this file stays self-contained for the
+    /// standalone unit tests.
+    static var sharedCacheURL: URL? {
+        guard let base = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first else { return nil }
+        return base
+            .appendingPathComponent("InputSa", isDirectory: true)
+            .appendingPathComponent("dojo_shared.json")
+    }
+
     /// Bundled seed shipped inside the app.
     private static var bundledSeedURL: URL? {
         Bundle.main.url(forResource: "dojo_corrections", withExtension: "json", subdirectory: "dojo")
             ?? Bundle.main.url(forResource: "dojo_corrections", withExtension: "json")
     }
 
-    /// Resolve the active file, seeding Application Support from the bundle if needed,
-    /// then decode it. Returns `[]` on any failure.
-    private static func loadEntries() -> [Entry] {
+    /// Shared (community) cache the sync layer writes. Read-only, no seeding —
+    /// absent until the first successful `DojoSharedSync.syncNow()`. Returns `[]`
+    /// on any failure (missing / malformed / not yet synced).
+    private static func loadSharedEntries() -> [Entry] {
+        guard let url = sharedCacheURL,
+              FileManager.default.fileExists(atPath: url.path) else { return [] }
+        return decodeEntries(at: url)
+    }
+
+    /// Resolve the personal file, seeding Application Support from the bundle if
+    /// needed, then decode it. Returns `[]` on any failure.
+    private static func loadPersonalEntries() -> [Entry] {
         let fm = FileManager.default
 
         guard let supportURL = applicationSupportURL else {

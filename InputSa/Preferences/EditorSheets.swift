@@ -17,13 +17,16 @@ final class DojoEntrySheet: NSObject {
     private let wrongField = NSTextField()
     private let tierPicker: PillSegmentedControl
     private let phoneticSwitch = NSSwitch()
-    private let completion: (DojoCorrectionTable.Entry?) -> Void
+    private let shareSwitch = NSSwitch()
+    /// Completion carries the entry plus whether the user opted to share it to
+    /// the 道場共編詞庫 (default off — protects personal preference terms).
+    private let completion: (DojoCorrectionTable.Entry?, Bool) -> Void
 
     /// `initial` prefills the form (existing entry being edited, or a
     /// voice-parsed suggestion awaiting confirmation); nil is a blank add.
     static func present(on window: NSWindow, title: String,
                         initial: DojoCorrectionTable.Entry?,
-                        completion: @escaping (DojoCorrectionTable.Entry?) -> Void) {
+                        completion: @escaping (DojoCorrectionTable.Entry?, Bool) -> Void) {
         let editor = DojoEntrySheet(title: title, initial: initial, completion: completion)
         activeSheets.append(editor)
         window.beginSheet(editor.sheet) { _ in
@@ -32,7 +35,7 @@ final class DojoEntrySheet: NSObject {
     }
 
     private init(title: String, initial: DojoCorrectionTable.Entry?,
-                 completion: @escaping (DojoCorrectionTable.Entry?) -> Void) {
+                 completion: @escaping (DojoCorrectionTable.Entry?, Bool) -> Void) {
         self.completion = completion
         self.tierPicker = PillSegmentedControl(
             labels: ["一律套用", "限道場模式"],
@@ -58,6 +61,16 @@ final class DojoEntrySheet: NSObject {
         phoneticRow.spacing = DesignTokens.Spacing.compact
         phoneticRow.alignment = .centerY
 
+        // Share opt-in — default OFF so personal preference terms aren't pushed to
+        // the community pool unless the user deliberately chooses to.
+        shareSwitch.state = .off
+        let shareLabel = NSTextField(labelWithString: "同時分享到道場共編詞庫（送審後道友共用）")
+        shareLabel.font = DesignTokens.monoFont(11)
+        let shareRow = NSStackView(views: [shareSwitch, shareLabel])
+        shareRow.orientation = .horizontal
+        shareRow.spacing = DesignTokens.Spacing.compact
+        shareRow.alignment = .centerY
+
         tierPicker.translatesAutoresizingMaskIntoConstraints = false
         tierPicker.widthAnchor.constraint(equalToConstant: 260).isActive = true
 
@@ -66,6 +79,7 @@ final class DojoEntrySheet: NSObject {
             [fieldLabel("常見誤辨"), wrongField],
             [fieldLabel("套用範圍"), tierPicker],
             [NSView(), phoneticRow],
+            [NSView(), shareRow],
         ])
         SheetChrome.install(on: sheet, title: title, content: grid,
                             saveTarget: self, saveAction: #selector(save),
@@ -85,19 +99,19 @@ final class DojoEntrySheet: NSObject {
             wrong: wrong, correct: correct,
             tier: tierPicker.selectedIndex == 1 ? "dojoOnly" : "always",
             phonetic: phoneticSwitch.state == .on)
-        endSheet(with: entry)
+        endSheet(with: entry, share: shareSwitch.state == .on)
     }
 
-    @objc private func cancel() { endSheet(with: nil) }
+    @objc private func cancel() { endSheet(with: nil, share: false) }
 
-    private func endSheet(with entry: DojoCorrectionTable.Entry?) {
+    private func endSheet(with entry: DojoCorrectionTable.Entry?, share: Bool) {
         sheet.sheetParent?.endSheet(sheet)
-        completion(entry)
+        completion(entry, share)
     }
 
     private func fieldLabel(_ text: String) -> NSTextField {
         let l = NSTextField(labelWithString: text)
-        l.font = DesignTokens.monoFont(12)
+        l.font = DesignTokens.uiFont(12, weight: .medium)
         return l
     }
 }
@@ -198,7 +212,7 @@ final class PromptEntrySheet: NSObject {
 
     private func fieldLabel(_ text: String) -> NSTextField {
         let l = NSTextField(labelWithString: text)
-        l.font = DesignTokens.monoFont(12)
+        l.font = DesignTokens.uiFont(12, weight: .medium)
         return l
     }
 }
@@ -211,13 +225,13 @@ private enum SheetChrome {
                         saveTarget: AnyObject, saveAction: Selector,
                         cancelTarget: AnyObject, cancelAction: Selector) {
         let titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = DesignTokens.monoFont(15, weight: .bold)
+        titleLabel.font = DesignTokens.uiFont(15, weight: .heavy)
 
-        let saveBtn = DesignTokens.makeSolidButton(title: "儲存", target: saveTarget, action: saveAction)
+        let saveBtn = DesignTokens.inkButton(title: "儲存", target: saveTarget, action: saveAction)
         saveBtn.keyEquivalent = "\r"
         let cancelBtn = NSButton(title: "取消", target: cancelTarget, action: cancelAction)
         cancelBtn.bezelStyle = .rounded
-        cancelBtn.font = DesignTokens.monoFont(12)
+        cancelBtn.font = DesignTokens.uiFont(12)
         cancelBtn.keyEquivalent = "\u{1b}"
         let buttonRow = NSStackView(views: [NSView(), cancelBtn, saveBtn])
         buttonRow.orientation = .horizontal

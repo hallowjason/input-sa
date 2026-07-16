@@ -8,6 +8,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var accessibilityPollTimer: Timer?
     private var aiModeMenu: NSMenu?
+    private var sharedSyncTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
@@ -33,6 +34,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
         }
+
+        // Pull the community-shared dojo vocabulary. Fire-and-forget and off the
+        // transcription path — needs no Accessibility permission, only network.
+        startSharedVocabSync()
+    }
+
+    /// Sync the 共編詞庫 once at launch, then every 24h (this is a long-lived
+    /// menu-bar app). Failures are silent — offline is a normal state.
+    private func startSharedVocabSync() {
+        DojoSharedSync.shared.syncNow()
+        let timer = Timer.scheduledTimer(withTimeInterval: 24 * 60 * 60, repeats: true) { _ in
+            DojoSharedSync.shared.syncNow()
+        }
+        timer.tolerance = 60 * 60   // generous — this is a background refresh, not time-critical
+        sharedSyncTimer = timer
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

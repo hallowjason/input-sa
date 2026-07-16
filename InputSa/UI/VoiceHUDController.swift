@@ -219,11 +219,55 @@ final class VoiceHUDController: NSWindowController {
 
     func hide() {
         window?.orderOut(nil)
+        confirmPanel?.orderOut(nil)
         stopIdleMotion()
         waveform.stop()
         stopGradientFlow()
         stopElapsedTimer()
         elapsed = 0
+    }
+
+    // MARK: - 口頭修正 confirm panel
+    //
+    // A separate, dynamically-sized panel — the recording HUD's fixed 230×150
+    // single-line status label truncated long terms. The key handling (↩ /
+    // ⇧↩ / ⎋) lives in InputController's event tap; this panel is purely the
+    // visual surface, so it stays a non-activating panel that never steals keys.
+    private var confirmPanel: NSPanel?
+
+    /// Show the parsed-entry confirmation, replacing the recording HUD window.
+    func showDojoConfirm(correct: String, wrong: String, on screen: NSScreen? = NSScreen.main) {
+        window?.orderOut(nil)
+        stopIdleMotion(); waveform.stop(); stopGradientFlow(); stopElapsedTimer()
+        present(DojoConfirmView(correct: correct, wrong: wrong), on: screen)
+    }
+
+    /// Replace the confirm panel with a single centered status line — used for
+    /// post-save feedback ("分享中…", "已送出待審核 ✓") without a jarring resize.
+    func updateDojoConfirmMessage(_ text: String) {
+        guard confirmPanel != nil else { return }
+        present(DojoConfirmView(message: text), on: confirmPanel?.screen ?? NSScreen.main)
+    }
+
+    private func present(_ view: DojoConfirmView, on screen: NSScreen?) {
+        let panel = confirmPanel ?? Self.makeBareConfirmPanel()
+        confirmPanel = panel
+        panel.contentView = view
+        panel.setContentSize(view.fittingSize)
+        panel.setFrameOrigin(fixedBottomCenterOrigin(size: panel.frame.size, screen: screen))
+        panel.orderFront(nil)
+    }
+
+    private static func makeBareConfirmPanel() -> NSPanel {
+        let p = NSPanel(
+            contentRect: NSRect(origin: .zero, size: CGSize(width: 320, height: 120)),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        p.backgroundColor = .clear
+        p.isOpaque = false
+        p.hasShadow = true
+        p.level = .popUpMenu
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        return p
     }
 
     /// Feeds the latest microphone amplitude (0...1) into the waveform view.
@@ -304,4 +348,160 @@ func fixedBottomCenterOrigin(size: CGSize, screen: NSScreen?) -> NSPoint {
     let x = sf.midX - size.width / 2
     let y = sf.minY + bottomMargin
     return NSPoint(x: x, y: y)
+}
+
+// MARK: - 口頭修正 confirm surface
+
+/// Dynamically-sized confirmation view: multi-line term display + an action
+/// legend, or (via `init(message:)`) a single centered status line. Wrapping
+/// labels have their max width capped so long terms wrap instead of truncating.
+/// The rounded CALayer background re-resolves on light/dark change, matching
+/// CardRowView's technique.
+private final class DojoConfirmView: NSView {
+    private static let corner: CGFloat = 18
+    private static let maxWidth: CGFloat = 360
+
+    private static let sideInset: CGFloat = 20
+
+    /// Full confirm layout (term + action legend).
+    init(correct: String, wrong: String) {
+        super.init(frame: .zero)
+        let (stack, legendWidth) = Self.buildConfirmStack(correct: correct, wrong: wrong)
+        // Card must be at least as wide as the action legend, or the legend's
+        // last pill ("⎋ 取消") overflows the card's right edge when a short term
+        // label alone sets the width. ("標頭列多顆控制項要算總寬".) Capped at
+        // maxWidth — the legend is measured to comfortably fit under it.
+        commonInit(content: stack, minWidth: legendWidth + 2 * Self.sideInset)
+    }
+
+    /// Single-line status message (post-save feedback).
+    init(message: String) {
+        super.init(frame: .zero)
+        let label = NSTextField(labelWithString: message)
+        label.font = DesignTokens.monoFont(13, weight: .bold)
+        label.textColor = .labelColor
+        label.alignment = .center
+        let stack = NSStackView(views: [label])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.edgeInsets = NSEdgeInsets(top: 16, left: 22, bottom: 16, right: 22)
+        commonInit(content: stack, minWidth: 0)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func commonInit(content: NSStackView, minWidth: CGFloat) {
+        wantsLayer = true
+        layer?.cornerRadius = Self.corner
+        layer?.borderWidth = 1
+        updateColors()
+        content.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(content)
+        // Pin content to all four edges — the view's height/width follow the
+        // content's intrinsic size (same pattern as DesignTokens.makeSectionCard).
+        var cs: [NSLayoutConstraint] = [
+            content.topAnchor.constraint(equalTo: topAnchor),
+            content.leadingAnchor.constraint(equalTo: leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor),
+            widthAnchor.constraint(lessThanOrEqualToConstant: Self.maxWidth),
+        ]
+        if minWidth > 0 {
+            cs.append(widthAnchor.constraint(
+                greaterThanOrEqualToConstant: min(minWidth, Self.maxWidth)))
+        }
+        NSLayoutConstraint.activate(cs)
+        setContentHuggingPriority(.required, for: .vertical)
+        setContentHuggingPriority(.required, for: .horizontal)
+        content.setContentHuggingPriority(.required, for: .vertical)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateColors()
+    }
+
+    private func updateColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.98).cgColor
+            layer?.borderColor = NSColor.separatorColor.cgColor
+        }
+    }
+
+    // MARK: Content builders
+
+    /// Returns the assembled stack plus the action legend's measured width —
+    /// the legend's intrinsic width does not reliably propagate through the
+    /// outer stack (BadgePill sizes via internal constraints), so the caller
+    /// enforces it as the card's minimum width instead.
+    private static func buildConfirmStack(correct: String, wrong: String) -> (NSStackView, CGFloat) {
+        let title = NSTextField(labelWithString: "加入道場詞庫？")
+        title.font = DesignTokens.monoFont(13, weight: .bold)
+        title.textColor = .secondaryLabelColor
+
+        var rows: [NSView] = [
+            title,
+            infoRow(caption: "正確詞", value: correct, valueColor: DesignTokens.accentGold),
+        ]
+        if !wrong.isEmpty && wrong != correct {
+            rows.append(infoRow(caption: "常見誤辨", value: wrong, valueColor: .labelColor))
+        }
+        let legend = actionLegend()
+        rows.append(legend)
+
+        let stack = NSStackView(views: rows)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 16, left: 20, bottom: 16, right: 20)
+        return (stack, legend.fittingSize.width)
+    }
+
+    private static func infoRow(caption: String, value: String, valueColor: NSColor) -> NSView {
+        let cap = NSTextField(labelWithString: caption)
+        cap.font = DesignTokens.monoFont(11, weight: .bold)
+        cap.textColor = .secondaryLabelColor
+        cap.setContentHuggingPriority(.required, for: .horizontal)
+        cap.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let val = NSTextField(wrappingLabelWithString: value)
+        val.font = DesignTokens.monoFont(15, weight: .bold)
+        val.textColor = valueColor
+        val.preferredMaxLayoutWidth = maxWidth - 90
+
+        let row = NSStackView(views: [cap, val])
+        row.orientation = .horizontal
+        row.alignment = .firstBaseline
+        row.spacing = 8
+        return row
+    }
+
+    private static func actionLegend() -> NSView {
+        func item(_ key: String, _ text: String, fill: NSColor, keyColor: NSColor) -> NSStackView {
+            let pill = BadgePill(text: key, fill: fill, textColor: keyColor, fontSize: 10, height: 20)
+            let lbl = NSTextField(labelWithString: text)
+            lbl.font = DesignTokens.monoFont(11, weight: .medium)
+            lbl.textColor = .labelColor
+            let s = NSStackView(views: [pill, lbl])
+            s.orientation = .horizontal
+            s.spacing = 5
+            s.alignment = .centerY
+            return s
+        }
+        let row = NSStackView(views: [
+            item("↩", "加入", fill: DesignTokens.accentGold, keyColor: .black),
+            item("⇧↩", "加入並分享", fill: NSColor.systemTeal, keyColor: .white),
+            item("⎋", "取消", fill: NSColor.systemGray, keyColor: .white),
+        ])
+        row.orientation = .horizontal
+        row.spacing = 14
+        row.alignment = .centerY
+
+        // Small top gap separating the legend from the info rows.
+        let wrap = NSStackView(views: [row])
+        wrap.orientation = .vertical
+        wrap.alignment = .leading
+        wrap.edgeInsets = NSEdgeInsets(top: 6, left: 0, bottom: 0, right: 0)
+        return wrap
+    }
 }
