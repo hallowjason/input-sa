@@ -1,7 +1,43 @@
-# Session Context — 最後更新 2026-07-15
+# Session Context — 最後更新 2026-07-16（深夜）
 
 ## 🔵 目前狀態（一句話）
-**新增 Apple Foundation Models 本地潤飾 provider（Gemini／Apple 本地二選一），已 build+裝機+使用者實測穩定，即將 commit+push+發版 v2.2.0。**
+**未 commit 的改動：①道場共編詞庫全功能（verifier 9/9）②偏好設定「Apple 視覺改版 v3」——System Settings 側欄版面＋apple.com 視覺紀律（使用者嫌 v2 retro ledger 廉價，經 HTML mockup 提案核准後全面重做；v2 與抽屜結構已被 v3 完全取代）。已裝機；等使用者親測後一起 commit＋發版。**
+
+## ✅ 2026-07-16 深夜完成（偏好設定 Apple 視覺改版 v3）
+- **背景**：使用者對 v2 retro ledger 評價「非常廉價」，指定用 `~/.claude/references/design-md-library/design-md/apple/DESIGN.md` 重新提案、捨棄過去所有視覺基礎。先做互動 HTML mockup（`design-refs/apple-proposal.html`，瀏覽器四分頁×深淺色自驗）獲使用者「這很棒，就這樣改」後才動 Swift
+- **設計宣告**：版面骨架＝macOS System Settings（側欄＋分組白卡列）；視覺紀律＝apple.com（#f5f5f7 畫布/#1d1d1f 墨、白卡 10pt 圓角 hairline、**唯一彩色 Apple Blue #0071e3 只給互動元件**、綠/橘點為語意狀態色、徽章單色化：一律套用=墨實心/限道場・同音=淺灰/共編=細框）
+- **結構**：視窗 520×640 → **780×560 固定**（.fullSizeContentView＋透明標題列）；`PreferencesSidebar.swift`（新檔：NSVisualEffectView .sidebar 材質、像素觀音 64pt 原尺寸 app 識別、四個手繪 nav 按鈕，選中=accent 圓角 pill；選擇單一真相在 controller.showPane）；四個 pane 各自為 NSScrollView，make…Content() 控制樹照舊
+- **控制項替換（同 action 語意）**：PillSegmentedControl → 原生 NSPopUpButton（provider index 0/1/2=groq/google/sherpa、polish 0/1=gemini/apple 不變）；InkPillButton → AccentTextButton 藍字按鈕（卡片 footer「＋新增」「用說的新增」，setTitle 保樣式）；鍵帽改「動作名＋說明左、灰 chip 右」原生排法；API Key 欄移入卡列（mono 11、寬 220）
+- **DesignTokens v3**：新 Palette＋groupCard（autoSeparators 參數：條件列自帶 leading hairline 包 wrapper，隱藏時分隔線跟著走）/row/statusRow/group/popup/pushButton/textButton/keycap/badge(BadgeStyle) 工廠；**保留給 HUD**：accentGold、monoFont、BadgePill 舊簽名（新參數全有預設值）；**保留給 EditorSheets**：inkButton/softButton/makeFieldGrid/Spacing/Grid/PillSegmentedControl（sheets 功能元件未動，自動吃新單色 palette）；FlippedView 從 DrawerCardView 搬入
+- **CardListView v3**：白卡內 flat rows（48pt＋hairline 分隔）、Row.icon 可選（dojo 無圓徽、AI 模式留 emoji tile）、**高度 hug 內容 cap maxHeight**（無死空間）、hover 灰底＋徽章↔編輯/刪除交叉淡化保留、shared read-only index 映射不變；dojo 列 subtitle 改「常見誤辨：X」、新增 footer 詞條計數（dojoCountLabel，取代 drawer summary）
+- **移除**：DrawerCardView.swift（刪檔＋build.sh SOURCES）、refreshDrawerSummaries 全部呼叫點、banner masthead（識別移入側欄）
+- **驗證**：./build.sh 乾淨（僅既有 NSUserNotification 棄用警告）；dojo 13 項迴歸全過；離線截圖 harness 重建（**新雷**：離線對 NSScrollView/整 contentView cacheDisplay 全白，要對 documentView 截再手動合成——已寫入全域記憶 reference_appkit_ui_testing.md 第 9 點）四分頁×深淺 8 張逐張人工比對 mockup；fresh verifier 驗證（結果見下次 session 或本次記錄）
+- **已知非問題**：快捷鍵錄製框深色偏亮＝既有元件樣式（v2 前就存在）；harness 裡 dojoMode switch 顯示 off＝bundle id 不同的 UserDefaults 假象
+
+## ✅ 2026-07-16 晚間完成（偏好設定視覺大改版 v2 — retro ledger 設計系統）
+- **背景**：使用者對早上外包（Codex mockup）做出來的抽屜 UI 成效不滿，附 budgeting-app 參考圖（米色畫布＋莫蘭迪大色塊咬合卡＋Swiss 粗黑編排＋右側數值），指定「這次 Claude 自己做，套 figma 等級設計規範精細度」。方向判讀：視覺走參考圖的復古帳本語言，工程精細度按 figma DESIGN.md 等級（精確 type scale/kern、pill 幾何、chrome 色彩紀律——**chrome 只有 ink 與 paper，彩色只屬於色塊本身，全面禁用 system 色**）
+- **DesignTokens.swift 重寫**：`Palette`（canvas/paper/paperHi/ink/inkInverse + sage/camel/butter/red/orange/silver/forest，全部 light/dark 雙組 dynamic）＋語意映射（statusLocal=forest/statusCloud=camel/statusWarn=orange/statusError=red）；type scale 工廠（`uiFont`/`styledLabel` 帶 kern、`sectionLabel` tracked 小標、`caption`）；結構工廠（`hairline`/`settingRow`/`statusRow` dot+值）；控制項（`inkButton` 實心黑 pill/`softButton` ink8%、`InkPillButton` 自繪含 `setTitle` 保樣式、`StatusDotView`/`HairlineView`）。**mono 只留鍵帽與 API Key 欄**，CJK 內文全改 SF Pro/PingFang。舊 API（makeSectionCard/makeFieldGrid/monoFont/accentGold）保留給 HUD
+- **DrawerCardView**：header 84pt、圓角 26、白圓徽 44（paperHi 實心，dark 下 glyph 翻 cream）、category kern 2.0/title 22 heavy kern -0.3、**新增 `setSummary` trailing 狀態值**（參考圖 -$35 位置：本地/右 ⌥/標準/54 詞條），`refreshDrawerSummaries()` 在六個變更點推播
+- **四 tab 拆嵌套白卡**：改「sectionLabel＋設定列＋hairline」扁平群組；systemGreen/Blue 狀態橫幅改 dot 狀態列；連結按鈕 ink 底線（棄 linkColor）；徽章色票化（一律套用=金/限道場=silver/同音=sage/共編=camel）；emoji 圖示全拿掉改 SF Symbols；文案 CJK 標點全形化（逗號/冒號/斜線）
+- **banner**:「偏好設定」27 heavy＋INPUT-SA mono 小標、像素觀音右置;視窗 520×640
+- **驗證**:離線截圖 10 張（收合+四抽屜 × 深淺）逐張人工檢查;./build.sh 乾淨;dojo 13 項迴歸全過;fresh verifier 8/8 CONFIRMED（功能鏈/色票紀律/PillTabBar 無殘留/HUD 無破壞/summary 呼叫點/key 未變）
+- **順手清掉**:PillTabBar.swift 死碼（檔案移除＋build.sh SOURCES 拿掉——CONTEXT 遺留待辦完成）;`design-refs/`（外包 mockup＋參考圖整包）與截圖 harness 已移入 `~/.Trash/input-sa-*-20260716`,使用者清空垃圾桶即可（本文件中對 design-refs/mockup-v4.html 的引用僅為歷史記錄）
+- **已知非問題**:截圖 harness 裡 Gemini API Key 欄顯示亂碼——ad-hoc 重簽後 Keychain ACL 不認,是 harness 環境現象;真 app 裝機版簽章一致不受影響,親測時確認即可
+
+## ✅ 2026-07-16 完成（偏好設定抽屜 UI 改版）
+- **流程**：使用者指定「外部 AI 規劃版面、Claude 只驗收、實作嚴禁動功能」。Gemini 三輪（plan+A/B 案+互動 mockup）被使用者退貨；改派 **Codex**（`codex exec --sandbox workspace-write -i 圖.png -`，prompt 走 stdin——**變長 `-i` 會吞掉位置參數 prompt，這是坑**）產 `design-refs/mockup-v4.html`，使用者核准為基底＋「收斂」指示
+- **實作**（executor＋我收尾）：移除 PillTabBar/NSTabView 分頁，改四個 `DrawerCardView`（錢包卡堆疊、-18pt 咬合、初始全收合、點頭展開 0.42s cubic-bezier(0.22,1.26,0.36,1)、可多開）；`PreferencesWindowController` 856 行拆成主檔＋四個 tab extension 檔（stored properties 從 private 改 internal——extension 不能放 stored property）；DesignTokens 加莫蘭迪色票（鼠尾草/卡其/鵝黃/紅，深淺各一組）；道場模式 switch 從 Tab1 移到道場詞庫抽屜（同控制項同 action，只搬位置）
+- **驗收**：10 張離線截圖（收合+四抽屜 × 深淺）逐張人工檢查；修掉 CardListView 固定高度切半列問題（道場 258→266=4列+半列暗示、AI 模式 268→172=貼合3列）；fresh verifier 8/8 CONFIRMED（控制項/selector/key 一一對應、API Key 雙保險、分享鏈、build 乾淨、DrawerCardView 純 layout、PillTabBar 已死碼）
+- **踩雷（新）**：①截圖 harness 的 bundle id 與真 app 不同 → `UserDefaults.standard` 讀到空網域，dojoMode switch 在截圖永遠顯示 off——**是假象不是 bug**，驗 defaults 綁定要用真 app；②codex exec 的 `-i` 是變長參數會吃掉後面的 prompt，prompt 一律走 stdin（`codex exec ... - <<'EOF'`）
+- **遺留（低優先）**：PillTabBar.swift 死碼未刪（自包含可編譯，要清就從 build.sh SOURCES 拿掉+刪檔）；Gemini API Key 欄位明碼顯示是**改版前既有行為**，若要改密碼樣式屬功能小改另案；快捷鍵錄製框深色模式偏亮（既有元件樣式）
+
+## ✅ 2026-07-16 完成（道場共編詞庫）
+- **雲端**：Google Sheet `1XHEQahuFD5lWM87JQIZGMYNsTdSWtICHFe814SlwMbI`（分頁 vocab，欄位 correct|wrong|tier|phonetic|note|submitter|submitted_at|status；**審核＝把 status 改 approved**）＋ GAS Web App（`tools/gas-dojo-vocab/`，scriptId `1ENJn8VMnPDhYLIpD_TNhUjCFeYQDs8Q1lYhYBWPgJ_aiMbXHVyT_1_10`，endpoint `https://script.google.com/macros/s/AKfycbzGlQvM-yIr4H0LMjxFwlwkRRDYpNR_tm16tL5bGywfK_UFxkET3hKeHb4xPHL5YyMbkA/exec`）。doGet 只回 approved；doPost submit 寫 pending（長度驗證＋每日 200 條全域上限＋同 correct+wrong 去重）。curl 兩步驟法實測三路徑全過
+- **App 端**：新檔 `DojoSharedSync.swift`（啟動＋24h Timer 同步→原子寫 `dojo_shared.json`→reload；submit POST）；`DojoCorrectionTable` 拆 personalEntries/sharedEntries/合併表（**個人優先去重**，save() 只寫個人檔——編輯器永不污染個人檔）；`dojoVocabularySection` cap 80 詞（個人優先）；右 Shift 確認改動態尺寸 DojoConfirmView（↩ 加入／⇧↩ 加入並分享／⎋ 取消）；DojoEntrySheet 加分享 switch（預設 off）；偏好設定 Tab1 加「共編暱稱」、道場分頁共享詞條唯讀＋「共編」徽章
+- **驗證**：build 乾淨；tests/main.swift 13 項迴歸全過；fresh verifier 九項全 CONFIRMED（轉錄路徑零改動/同步輸入分離/存檔隔離/合併規則/離線韌性/cap/macOS12/build/key 前綴）；確認面板離線截圖淺深色×長短詞條親眼驗收；裝機後啟動同步實測 `shared sync ok: 27 entries`
+- ⚠️ **事故與救援（已完全復原）**：verifier 測試時誤用真 save() 覆寫了 runtime `dojo_corrections.json`（27→24 條）。因今早建 Sheet 時匯入的正是該檔原始內容，已從 Sheet seed 列完整還原 27 條（含只在本機的 補員補缺/崇正/崇正寶宮）。教訓：**任何 harness 呼叫 save() 前必須先把 HOME 指到沙盒目錄**
+- **踩雷（新）**：DojoConfirmView 操作列（多 pill 橫排）的 intrinsic 寬度不會透過外層 NSStackView 傳播（BadgePill 用內部約束定寬）——卡片要用 `legend.fittingSize.width + 2*inset` 當 minWidth 強制，否則短詞條時操作列溢出卡片右緣（屬「多控制項要算總寬」同類）
+- **已知取捨**：endpoint 匿名可寫（URL 將隨開源 repo 公開），防線是審核閘門＋GAS 端驗證；成功但 0 條 approved 的同步會清空快取（無 version-skip 防護，低風險）；repo 種子檔維持 24 條（新增 3 條靠雲端同步分發，不必進安裝包）
 
 ## ✅ 2026-07-14～15 完成（Apple 本地潤飾 provider）
 - **可行性 spike**（scratchpad/fm-quality/，不進 repo）：`SystemLanguageModel.default` 本機（M5, macOS 26.5.2）可用，同六題道場句對比 Gemini 6/6 vs Apple 自由文字模式 3/6；四輪 prompt 迭代確認 3B 是能力天花板，非 prompt 問題；context window 僅 4096 tokens
@@ -113,16 +149,17 @@ InputSa/AIServices/GeminiPolishService.swift← 模型 fallback 鏈，SSE 串流
 InputSa/AIServices/TranscriptionMode.swift  ← 潤飾/翻譯 prompt + dojoVocabularySection
 InputSa/AIServices/DojoCorrectionTable.swift← 精確替換 + 拼音同音層；24 詞條
 InputSa/AIServices/DojoVoiceParser.swift    ← 【下午新檔】口頭修正共用解析器（Gemini JSON + 防禦解碼）
-InputSa/UI/CardListView.swift               ← 【下午新檔】卡片列表元件（CardRowView/IconCircle/BadgePill）
-InputSa/Preferences/EditorSheets.swift      ← 【下午新檔】DojoEntrySheet/PromptEntrySheet 視窗 sheet 編輯器
+InputSa/UI/CardListView.swift               ← 【v3 重寫】白卡內 flat rows、動態高、單色徽章（BadgePill 舊簽名保留給 HUD）
+InputSa/Preferences/EditorSheets.swift      ← 【下午新檔】DojoEntrySheet/PromptEntrySheet 視窗 sheet 編輯器（v3 未動，吃新單色 palette）
 InputSa/UI/VoiceHUDController.swift         ← 【大改】液態玻璃 HUD，五尊統一漂浮動畫（拿掉粒子特效）
                                               + 即時聲波 + 動態漸層外框；floatingOrigin 拆成兩個函式
 InputSa/UI/WaveformView.swift               ← 【新檔】像素風格滾動音量條
 InputSa/UI/HUDCharacter.swift               ← 角色 enum、每尊耳機錨點座標
-InputSa/UI/DesignTokens.swift               ← 【新檔】偏好設定共用視覺常數/工廠函式
-InputSa/UI/PillTabBar.swift                 ← 【新檔】自訂深色分頁列
-InputSa/UI/PillSegmentedControl.swift       ← 【新檔】自訂金色選中分段控制項
-InputSa/Preferences/PreferencesWindowController.swift ← 【大改】PillTabBar 驅動、4 分頁全部改用卡片系統
+InputSa/UI/DesignTokens.swift               ← 【v3 重寫】Apple palette＋分組卡列工廠；accentGold/monoFont/BadgePill/inkButton/makeFieldGrid 舊 API 保留
+InputSa/UI/PillSegmentedControl.swift       ← 只剩 EditorSheets 在用（自動吃新單色 ink）
+InputSa/Preferences/PreferencesSidebar.swift ← 【v3 新檔】System Settings 側欄（sidebar 材質＋像素觀音＋nav 按鈕）
+InputSa/Preferences/PreferencesWindowController.swift ← 【v3 重寫】780×560 側欄版面、四 pane 顯隱切換（showPane 單一真相）
+InputSa/Preferences/Preferences…Tab.swift ×4 ← 【v3 重寫】分組白卡列版面；控制樹/action/資料流不變
 build.sh / install.sh                        ← 裸編譯打包本機安裝（開發者用）
 package-release.sh                           ← GitHub Release 打包（雲端優先、強制 ad-hoc 簽章）；讀 Info.plist 版號命名 zip
 InputSa/Resources/Info.plist                 ← 【2026-07-13】版本號 2.1.0 (build 3)，改版號在這裡
@@ -130,21 +167,26 @@ README.md / .gitignore                       ← 面向 GitHub 公開 repo
 ```
 
 ## 目前發布狀態
-- **GitHub repo**：https://github.com/hallowjason/input-sa（public，main branch，最新 commit `740c546`）
-- **GitHub Release**：`v2.1.0`（2026-07-13 發布，zip 17MB 雲端優先版，見上方連結）
-- **本機**：`~/Applications/Input-sa.app` 已裝機是含本地模型版（`install.sh` 跑法，跟 Release zip 不同）；`build/` 目錄也已恢復含模型狀態
+- **GitHub repo**：https://github.com/hallowjason/input-sa（public，main branch，最新 commit `f2c570f`）
+- **GitHub Release**：`v2.2.0`（2026-07-16 發布，zip 17MB 雲端優先版）https://github.com/hallowjason/input-sa/releases/tag/v2.2.0
+- **本機**：`~/Applications/Input-sa.app` 已裝機是含本地模型版（`install.sh` 跑法，跟 Release zip 不同）；`build/` 目錄已重編確認恢復含模型狀態；polishProvider 現在跟著使用者上次在偏好設定的選擇（發版前這個 key 曾被截圖 harness 污染過一次，已用 `defaults delete com.inputsa.inputmethod com.inputsa.polishProvider` 清除歸零）
+- **這台機器沒有全域 git 身分**（`~/.gitconfig` 不存在）：本次 commit 前曾跳 `Author identity unknown`，用 `git config --local` 比照本 repo 既有 commit 作者（`維宸 <gooo@weichendeMacBook-Pro.local>`）補上，已寫入全域 `~/.claude/reference/lessons.md`——下次任何全新 repo 第一次 commit 都可能重踩，直接查歷史作者複用即可
 - 下次改完程式碼要發新 Release：改版號（`InputSa/Resources/Info.plist` 的 `CFBundleShortVersionString`/`CFBundleVersion`）→ `./package-release.sh` → commit 版號 → push → `gh release create vX.Y.Z ...`
 
 ## 待辦 / 未決事項
+- **【最優先】使用者親測 Apple 視覺改版 v3**：側欄手感、四分頁內容、深淺色、EditorSheets（未改版，只換色票——若使用者嫌不搭要另案調整）、真 app 的 API Key 欄位顯示；連同道場共編一起驗完就 commit＋發版（Info.plist 建議跳 2.3.0）
 - **【次優先，延續中】使用者持續使用回饋**：①Apple 本地潤飾長期使用感受（新詞彙表外的同音錯字仍需右 Shift 口頭修正累積，非模型自動學會）②右 Shift 口頭修正真實錄音流程的長期使用感受（上次只 E2E 測過 Gemini 解析層）③右 Shift 打大寫時 HUD 閃現的取捨若嫌煩，備案是延遲 300ms 才顯示 HUD
 - Ollama+Qwen／llama.cpp/MLX 本地潤飾路線目前不打算做（Apple 本地已達成離線需求，額外裝 Ollama 不適合發給朋友）——若未來要重啟評估，查當下最新版本，不要用這份記錄裡的型號當現況
-- PreferencesWindowController.swift 856 行，略超 800 行檔案上限——下次動它時考慮把四個 makeXXXTab 拆檔
 - [ ] P1（舊）：refreshShortcutCache migration 根治 modifier-only 殘留 shortcut bug（歷史遺留）
 - [ ] P2（舊）：翻譯模式也注入道場詞彙表（現在只有潤飾有）
 - [ ] P2（舊）：用完還原剪貼簿；靜音 VAD
 - [ ] `assets_dl/` 暫存需使用者手動清（Claude rm 被權限擋）
 
 ## 踩雷點（動手前必看，本輪新增在最上面）
+- **vertical NSStackView 的 intrinsic 寬 = 最寬 arranged view 的 fitting 寬**，NSScrollView 回報 0——視窗會整個被縮到 masthead 的 fitting 寬。解法：contentView 鎖明確寬度＋每個 arranged view `widthAnchor = mainStack.widthAnchor`。舊版看似滿寬只是內容 fitting 恰好 = 520 的巧合
+- **直接 addSubview 進自訂 view 的 NSTextField 必須手動關 `translatesAutoresizingMaskIntoConstraints`**（stack 內的不用）——漏一個（DrawerCardView 的 valueLabel）整個 header 的約束系統會被 autoresizing 假約束打爆，症狀是所有兄弟元件擠成一團
+- **批次全形化 CJK 標點的腳本**：判斷條件用「前後皆 CJK」比「任一側 CJK」安全（後者會誤傷 `NSView(),` 這類程式碼逗號——半形 `)` 誤入 CJK 集合過一次）;replacement 字元一定要用 `，` 或明確變數,heredoc 裡肉眼打的全形字可能其實是半形（發生過一次 no-op）
+- **sed `/pattern/d` 會刪整行**——多檔名擠同一行的 build 腳本會被連坐刪掉其他檔（rebuild.sh 曾因此丟了三個 SOURCES）
 - **NSTextField 設了 attributed string 後，欄位自己的 lineBreakMode 會被蓋掉**——截尾要 bake 進 attributed string 的 NSParagraphStyle，否則固定高度卡片裡文字折成兩行
 - **NSScrollView 裡放垂直卡片堆疊**：documentView 非 flipped 時內容錨定在底部，要包一層 `isFlipped=true` 的容器；documentView 寬度要 pin 到 clipView 寬度才不會橫向滾動
 - **CALayer 底色不會跟隨深淺色切換**——在 `viewDidChangeEffectiveAppearance` 用 `effectiveAppearance.performAsCurrentDrawingAppearance` 重新解析 NSColor 再設 cgColor（CardRowView 的做法）
@@ -172,8 +214,13 @@ README.md / .gitignore                       ← 面向 GitHub 公開 repo
 ```bash
 cd /Users/gooo/Desktop/.claude/projects/input-sa
 # 對 Claude 說：「讀 CONTEXT.md，繼續 input-sa」
-# 現況：Apple 本地潤飾 provider 完成、commit+push+Release v2.2.0 已發布，repo/本機都是最新狀態
-# 未決：使用者持續使用回饋（見上方「待辦」），無進行中的程式改動
+# 現況：三大改動皆完成、已裝機、全部未 commit——①道場共編詞庫②偏好設定抽屜結構③偏好設定視覺大改版 v2（retro ledger 設計系統）
+#       ~/Applications/Input-sa.app 已是最新（含本地模型）；build/ 已重編乾淨
+# 第一件事：問使用者親測結果（抽屜手感／深淺色／四抽屜內容／API Key 欄顯示）。滿意 → 一次 commit 這三包 + 發新 Release
+#          發版流程：改 Info.plist 版號（現 2.1.0 build 3，建議跳 2.3.0）→ ./package-release.sh → commit → push → gh release create
+#          commit 前無全域 git 身分，用 git config --local 比照歷史作者「維宸 <gooo@weichendeMacBook-Pro.local>」
+# 未決：使用者持續使用回饋（見上方「待辦」）
 # 環境：provider=sherpa（STT，本地）、polishProvider=依使用者上次選擇、dojoMode=true；GEMINI_API_KEY 在 ~/.claude/.env（不是 ~/.env）
 # 驗證離線 UI 用「離線截圖驗收法」，見全域記憶 reference_appkit_ui_testing.md
+#   本次 harness 腳本已丟垃圾桶，要重截需重建（把複製的 .app bundle + main.swift 一起 swiftc，見該記憶檔）
 ```
