@@ -36,6 +36,9 @@ final class VoiceHUDController: NSWindowController {
     private var usesBounce    = false   // maitreya: belly bounce instead of float
 
     private let redDot = "● "
+    /// Recording-state caption prefix (before the mm:ss timer). Defaults to
+    /// "錄音中"; the 劃詞問答 flow sets "問題錄音中" before showing. Reset on hide.
+    var recordingCaption = "錄音中"
 
     // MARK: - Init
     init() {
@@ -225,6 +228,7 @@ final class VoiceHUDController: NSWindowController {
         stopGradientFlow()
         stopElapsedTimer()
         elapsed = 0
+        recordingCaption = "錄音中"   // reset so the next dictation isn't mislabeled
     }
 
     // MARK: - 口頭修正 confirm panel
@@ -317,9 +321,10 @@ final class VoiceHUDController: NSWindowController {
             guard let self = self else { return }
             self.elapsed += 1
             let m = self.elapsed / 60, s = self.elapsed % 60
-            self.statusLabel.stringValue = self.redDot + String(format: "錄音中 %02d:%02d", m, s)
+            self.statusLabel.stringValue = self.redDot
+                + String(format: "\(self.recordingCaption) %02d:%02d", m, s)
         }
-        statusLabel.stringValue = redDot + "錄音中 00:00"
+        statusLabel.stringValue = redDot + "\(recordingCaption) 00:00"
     }
 
     private func stopElapsedTimer() {

@@ -13,6 +13,8 @@ extension PreferencesWindowController {
             ("即時翻譯", "說中文，翻譯成目標語言輸出", ["右 ⌘"], "長按"),
             ("口頭修正", "說詞條釋義，Enter 確認加入道場詞庫", ["右 ⇧"], "長按"),
             ("選字潤飾", "選取文字後按，Enter 接受、Esc 取消", ["⌥", "P"], nil),
+            ("劃詞問答", "選取文字後按住說問題，放開顯示答案", ["⌃", "⌥", "Q"], "長按"),
+            ("劃詞翻譯", "選取文字後按，浮窗顯示譯文（英／泰）", ["⌃", "⌥", "T"], nil),
             ("偏好設定", "開啟本視窗", ["⌃", "⌥", "P"], nil),
         ]
         let overviewCard = DesignTokens.groupCard(overviewRows.map { row in

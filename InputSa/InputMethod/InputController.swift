@@ -7,9 +7,11 @@ import ApplicationServices
 final class InputController: NSObject {
 
     // MARK: - Sub-systems
-    private let voiceHUD      = VoiceHUDController()
+    // voiceHUD / voiceService are `internal` (not private) so the select-and-act
+    // flows in SelectionActions.swift (a cross-file extension) can drive them.
+    let voiceHUD      = VoiceHUDController()
     private let polishPreview = PolishPreviewController()
-    private var voiceService: VoiceServiceProtocol = GroqVoiceService()
+    var voiceService: VoiceServiceProtocol = GroqVoiceService()
 
     // MARK: - Event Tap
     private var eventTap: CFMachPort?
@@ -34,7 +36,25 @@ final class InputController: NSObject {
     /// Wall-clock start of the current recording, captured in handleVoiceKeyDown.
     /// The type-specific *RecordingStartTime properties are nil'd before the async
     /// completion fires, so usage-stats duration is measured from this one instead.
-    private var recordingStartTime: Date?
+    /// Internal so SelectionActions' 劃詞問答 recording path can set it too.
+    var recordingStartTime: Date?
+    /// Rolling in-memory buffer of the most recent dictation results, fed to the
+    /// Gemini polish prompt as prior context so homophones resolve from what the
+    /// user just said (「道親」not「到親」). Privacy: memory-only, never persisted
+    /// (mirrors UsageStatsStore's "numbers only" stance); capped to the last 2
+    /// entries with a 3-minute TTL. Only the right-⌥ dictation path writes here;
+    /// translation / ⌥P / 劃詞問答 deliberately do not.
+    private var recentUtterances: [(text: String, at: Date)] = []
+    /// 劃詞問答 (⌃⌥Q): true while holding Q to record a spoken question, and the
+    /// selection captured the instant Q went down (before the mic opens).
+    var qaKeyRecording = false
+    var qaSelectedText: String?
+    /// Cursor rect captured when a select-and-act shortcut fires, so the answer
+    /// panel can be placed near where the user was working.
+    var selectionActionCursor: NSRect?
+    /// Bumps per HUD "flash" toast so a later real recording isn't hidden by a
+    /// stale auto-hide timer.
+    var hudFlashToken = 0
     /// AX element that was focused when recording began — used for injection after API calls complete.
     private var recordingTargetElement: AXUIElement?
     private lazy var polishHUD: NSPanel = makePolishHUD()
@@ -46,7 +66,9 @@ final class InputController: NSObject {
     private let kVKReturn: Int = 36
     private let kVKTab:    Int = 48
     private let kVKEscape: Int = 53
-    private let kVKP:      Int = 35   // 'p' — Ctrl+Option+P opens preferences
+    private let kVKP:      Int = 35   // 'p' — Ctrl+Option+P opens preferences / ⌥P polishes selection
+    let kVKQ:      Int = 12   // 'q' — Ctrl+Option+Q 劃詞問答 (hold to speak)
+    let kVKT:      Int = 17   // 't' — Ctrl+Option+T 劃詞翻譯 (single press)
 
     // MARK: - Start / Stop
     func start() {
@@ -85,9 +107,13 @@ final class InputController: NSObject {
         }
 
         // Wire up polish preview callbacks once — not on every show()
+        // onAccept only ever serves the manual-polish (⌥P) preview — the voice
+        // dictation pipeline injects directly without a preview — so recording
+        // usage stats here counts each accepted manual polish exactly once.
         polishPreview.onAccept = { [weak self] accepted in
             self?.injectText(accepted)
             UserStyleModel.shared.recordVoiceAccepted()
+            UsageStatsStore.shared.record(chars: accepted.count, durationMs: 0)
             self?.polishHUD.orderOut(nil)
         }
         polishPreview.onReject = { [weak self] in
@@ -183,7 +209,7 @@ final class InputController: NSObject {
             if cachedVoiceShortcut == nil {
                 if pureOption && keyCode == rightOptionKeyCode
                     && !optionKeyRecording && !translateKeyRecording && !correctionKeyRecording
-                    && activeVoiceKeyCode == nil {
+                    && !qaKeyRecording && activeVoiceKeyCode == nil {
                     optionKeyRecording = true
                     optionRecordingStartTime = Date()
                     handleVoiceKeyDown(keyCode: keyCode)
@@ -205,7 +231,7 @@ final class InputController: NSObject {
             // A keyDown while holding (e.g. right-Cmd+C combo) cancels the recording — see below.
             if pureCommand && keyCode == rightCommandKeyCode
                 && !translateKeyRecording && !optionKeyRecording && !correctionKeyRecording
-                && activeVoiceKeyCode == nil {
+                && !qaKeyRecording && activeVoiceKeyCode == nil {
                 translateKeyRecording = true
                 translateRecordingStartTime = Date()
                 handleVoiceKeyDown(keyCode: keyCode)
@@ -226,7 +252,7 @@ final class InputController: NSObject {
             // the recording below — same combo-cancel contract as right-Command.
             if pureShift && keyCode == rightShiftKeyCode
                 && !correctionKeyRecording && !translateKeyRecording && !optionKeyRecording
-                && activeVoiceKeyCode == nil {
+                && !qaKeyRecording && activeVoiceKeyCode == nil {
                 correctionKeyRecording = true
                 correctionRecordingStartTime = Date()
                 handleVoiceKeyDown(keyCode: keyCode)
@@ -242,6 +268,32 @@ final class InputController: NSObject {
             }
 
             return Unmanaged.passRetained(event)
+        }
+
+        // ── Answer panel (劃詞問答 / 劃詞翻譯) is a non-activating panel that
+        //    never becomes key, so ⎋ is caught here (same pattern as the polish
+        //    preview). Only closes when the panel is actually on screen.
+        if type == .keyDown && keyCode == kVKEscape && AnswerPanelController.shared.isVisible {
+            AnswerPanelController.shared.close()
+            return nil
+        }
+
+        // ── Manual polish preview (⌥P) is also a non-activating panel, so its
+        //    keys are caught here: ↩/⇥ accept, ⎋ reject. Any other keyDown
+        //    dismisses without injecting and passes through (same no-stuck-modal
+        //    contract as the pending 口頭修正 entry below).
+        if type == .keyDown && polishPreview.isActive {
+            if handlePolishPreviewKey(keyCode: keyCode) { return nil }
+            polishPreview.reject()
+            return Unmanaged.passRetained(event)
+        }
+
+        // ── 劃詞問答 (⌃⌥Q): own the Q key entirely while recording so autorepeat
+        //    keyDowns and the terminal keyUp don't leak a 'q' into the document.
+        //    keyUp (modifiers may already be released) ends the recording.
+        if qaKeyRecording && keyCode == kVKQ {
+            if type == .keyUp { finishSelectionQA() }
+            return nil
         }
 
         // ── Pending 口頭修正 entry: Enter saves, Esc discards, anything else
@@ -284,6 +336,39 @@ final class InputController: NSObject {
                 PreferencesWindowController.shared.showPreferences()
                 NSApp.activate(ignoringOtherApps: true)
             }
+            return nil
+        }
+
+        // ── ⌥P (Option alone, no Ctrl/Shift/Cmd): polish the current selection.
+        //    Skipped mid-recording so right-Option dictation (which holds the
+        //    Option flag) isn't hijacked, and autorepeat is ignored.
+        if type == .keyDown && keyCode == kVKP
+            && flags.contains(.maskAlternate)
+            && !flags.contains(.maskControl) && !flags.contains(.maskShift)
+            && !flags.contains(.maskCommand)
+            && !isAnyRecordingActive
+            && event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
+            triggerManualPolish()
+            return nil
+        }
+
+        // ── ⌃⌥Q: 劃詞問答 — capture selection + start recording on keyDown.
+        //    Autorepeat / keyUp are owned by the qaKeyRecording branch above.
+        if type == .keyDown && keyCode == kVKQ
+            && flags.contains(.maskControl) && flags.contains(.maskAlternate)
+            && !flags.contains(.maskShift) && !flags.contains(.maskCommand)
+            && !qaKeyRecording {
+            if !isAnyRecordingActive { startSelectionQA() }
+            return nil   // swallow the combo either way (never types 'q')
+        }
+
+        // ── ⌃⌥T: 劃詞翻譯 — single press. Ignore autorepeat so a held key
+        //    doesn't fire the translation repeatedly.
+        if type == .keyDown && keyCode == kVKT
+            && flags.contains(.maskControl) && flags.contains(.maskAlternate)
+            && !flags.contains(.maskShift) && !flags.contains(.maskCommand)
+            && event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
+            if !isAnyRecordingActive { triggerSelectionTranslate() }
             return nil
         }
 
@@ -500,17 +585,48 @@ final class InputController: NSObject {
     private func dispatchPolish(
         text: String,
         mode: TranscriptionMode,
+        priorContext: String? = nil,
         onPartial: ((String) -> Void)? = nil,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
         switch APIKeyStore.shared.polishProvider {
         case .apple:
+            // Apple's on-device 3B is deliberately NOT given prior context: extra
+            // prompt length feeds its 詞彙表膨脹幻覺 (short input → invented output).
+            // v1 keeps prior context Gemini-only; `priorContext` is dropped here.
             ApplePolishService.shared.enhance(text: text, mode: mode,
                                               onPartial: onPartial, completion: completion)
         case .gemini:
-            GeminiPolishService.shared.enhance(text: text, mode: mode,
+            GeminiPolishService.shared.enhance(text: text, mode: mode, priorContext: priorContext,
                                                onPartial: onPartial, completion: completion)
         }
+    }
+
+    // MARK: - Prior-context buffer (Gemini dictation polish only)
+
+    /// Record a completed dictation result for use as prior context on the next
+    /// utterance. Trims expired/overflow entries as a side effect. Memory-only.
+    private func recordUtterance(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        recentUtterances.append((text: trimmed, at: Date()))
+        recentUtterances = prunedUtterances()
+    }
+
+    /// Drop entries older than the 3-minute TTL and keep only the last 2.
+    private func prunedUtterances() -> [(text: String, at: Date)] {
+        let cutoff = Date().addingTimeInterval(-180)
+        let fresh = recentUtterances.filter { $0.at >= cutoff }
+        return fresh.suffix(2).map { $0 }
+    }
+
+    /// Prior context for the polish prompt: each entry capped at 120 chars,
+    /// expired ones dropped, joined oldest→newest. `nil` when nothing valid.
+    private func priorContextForPolish() -> String? {
+        let joined = prunedUtterances()
+            .map { String($0.text.prefix(120)) }
+            .joined(separator: "\n")
+        return joined.isEmpty ? nil : joined
     }
 
     /// AI polish step in the unified pipeline (Gemini cloud or Apple local).
@@ -526,6 +642,7 @@ final class InputController: NSObject {
             let formatted = TranscriptNumberFormatter.format(transcript)
             finishAndInject(formatted)
             UsageStatsStore.shared.record(chars: formatted.count, durationMs: durationMs)
+            recordUtterance(formatted)   // prior-context buffer: raw transcript on fallback
             return
         }
         let providerTag = provider == .apple ? "Apple" : "Gemini"
@@ -536,6 +653,9 @@ final class InputController: NSObject {
         dispatchPolish(
             text: transcript,
             mode: TranscriptionMode.activePolishMode,
+            // Prior context is Gemini-only (Apple 3B hallucination risk); compute
+            // before this utterance is recorded so it never sees itself.
+            priorContext: provider == .apple ? nil : priorContextForPolish(),
             onPartial: { [weak self] partial in
                 self?.voiceHUD.setState(.processing(Self.streamingPreview(partial, label: "潤飾中")))
             }
@@ -557,6 +677,7 @@ final class InputController: NSObject {
                     self.debugLog("polish out: \(String(final.prefix(120)))")
                     self.finishAndInject(final)
                     UsageStatsStore.shared.record(chars: final.count, durationMs: durationMs)
+                    self.recordUtterance(final)   // prior-context buffer: polished text
                 case .failure(let err):
                     // Fall back to the raw transcript, but tell the user polish didn't run —
                     // silent fallback made key/network failures look like a formatting bug.
@@ -566,6 +687,7 @@ final class InputController: NSObject {
                     let fallback = TranscriptNumberFormatter.format(transcript)
                     self.finishAndInject(fallback)
                     UsageStatsStore.shared.record(chars: fallback.count, durationMs: durationMs)
+                    self.recordUtterance(fallback)   // prior-context buffer: raw transcript on fallback
                     self.notifyPolishFailure(err.localizedDescription)
                 }
             }
@@ -594,12 +716,36 @@ final class InputController: NSObject {
         NSSound(named: "Pop")?.play()   // brief audio cue so user knows text was inserted
     }
 
+    // MARK: - Shared select-and-act helpers
+
+    /// True while any recording/PTT is in flight — select-and-act shortcuts must
+    /// not interrupt an ongoing dictation/translation/correction/QA session.
+    var isAnyRecordingActive: Bool {
+        optionKeyRecording || translateKeyRecording || correctionKeyRecording
+            || qaKeyRecording || activeVoiceKeyCode != nil
+    }
+
+    /// Brief non-blocking HUD toast (e.g. "沒有選取文字"), auto-hidden after 1.2 s.
+    /// Never shown while a recording is active (it would hijack the live HUD), and
+    /// a token guard stops a stale auto-hide from closing a later real HUD.
+    func flashHUDMessage(_ text: String) {
+        guard !isAnyRecordingActive else { return }
+        voiceHUD.show(state: .processing(text), near: getCursorRect(), on: NSScreen.main)
+        hudFlashToken += 1
+        let token = hudFlashToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            guard let self = self, token == self.hudFlashToken,
+                  !self.isAnyRecordingActive else { return }
+            self.voiceHUD.hide()
+        }
+    }
+
     // MARK: - Manual Text Polish (Option+P or custom shortcut)
     private func triggerManualPolish() {
-        guard let element = focusedElement() else { return }
-        var selVal: AnyObject?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selVal) == .success,
-              let text = selVal as? String, !text.isEmpty else { return }
+        guard let text = SelectionReader.read() else {
+            flashHUDMessage("沒有選取文字")
+            return
+        }
 
         dispatchPolish(text: text,
                        mode: TranscriptionMode.activePolishMode) { [weak self] result in
@@ -607,8 +753,13 @@ final class InputController: NSObject {
                 guard let self = self else { return }
                 switch result {
                 case .success(let enhanced):
-                    self.polishPreview.startPreview(original: text, enhanced: enhanced)
-                    self.showPolishHUD(enhanced)
+                    // Match the dictation pipeline's post-pass so 道場詞彙 and
+                    // number formatting survive in manual polish too, then preview.
+                    let dojoMode = UserDefaults.standard.bool(forKey: "com.inputsa.dojoMode")
+                    let corrected = DojoCorrectionTable.shared.correct(enhanced, dojoMode: dojoMode)
+                    let final = TranscriptNumberFormatter.format(corrected)
+                    self.polishPreview.startPreview(original: text, enhanced: final)
+                    self.showPolishHUD(final)
                 case .failure(let err):
                     self.showError("潤飾失敗：\(err.localizedDescription)")
                 }
@@ -759,7 +910,7 @@ final class InputController: NSObject {
     }
 
     // MARK: - Cursor Position
-    private func getCursorRect() -> NSRect {
+    func getCursorRect() -> NSRect {
         guard let element = focusedElement() else { return fallbackCursorRect() }
         return getCursorRectFor(element) ?? fallbackCursorRect()
     }

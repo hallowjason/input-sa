@@ -97,6 +97,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(todayItem)
         menu.addItem(withTitle: "語音輸入：長按右 Option 錄音，放開後自動輸出", action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "語音翻譯：長按右 Command 說中文，放開後輸出翻譯", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "劃詞問答：選字後長按 Ctrl+Option+Q 說問題，浮窗顯示答案", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "劃詞翻譯：選字後按 Ctrl+Option+T，浮窗顯示譯文", action: nil, keyEquivalent: "")
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "關於 Input-sa", action: #selector(showAbout), keyEquivalent: "")
             .target = self

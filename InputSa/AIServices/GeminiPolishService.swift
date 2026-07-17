@@ -34,9 +34,14 @@ final class GeminiPolishService {
 
     // MARK: - Enhance
     /// `onPartial` receives the accumulated text so far, on the main thread.
+    /// `priorContext` (dictation-polish path only) carries the user's most recent
+    /// utterance(s) so the model can resolve homophones from context. It is only
+    /// embedded by .standard/.custom prompts and is understanding-only — see
+    /// `TranscriptionMode.previousContextBlock`.
     func enhance(
         text: String,
         mode: TranscriptionMode,
+        priorContext: String? = nil,
         onPartial: ((String) -> Void)? = nil,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
@@ -46,13 +51,14 @@ final class GeminiPolishService {
                 userInfo: [NSLocalizedDescriptionKey: "Gemini API key not set. Please configure in Preferences."])))
             return
         }
-        attempt(text: text, mode: mode, apiKey: apiKey, modelIndex: 0,
+        attempt(text: text, mode: mode, priorContext: priorContext, apiKey: apiKey, modelIndex: 0,
                 onPartial: onPartial, completion: completion)
     }
 
     private func attempt(
         text: String,
         mode: TranscriptionMode,
+        priorContext: String?,
         apiKey: String,
         modelIndex: Int,
         onPartial: ((String) -> Void)?,
@@ -66,7 +72,7 @@ final class GeminiPolishService {
             }
             NSLog("[InputSa] Gemini %@ failed (%@) — falling back to %@",
                   model, err.localizedDescription, self.modelChain[modelIndex + 1])
-            self.attempt(text: text, mode: mode, apiKey: apiKey,
+            self.attempt(text: text, mode: mode, priorContext: priorContext, apiKey: apiKey,
                          modelIndex: modelIndex + 1,
                          onPartial: onPartial, completion: completion)
         }
@@ -79,7 +85,7 @@ final class GeminiPolishService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = overallTimeout
 
-        let prompt = mode.systemPrompt(transcript: text)
+        let prompt = mode.systemPrompt(transcript: text, priorContext: priorContext)
         let body: [String: Any] = [
             "contents": [["parts": [["text": prompt]]]],
             "generationConfig": [
