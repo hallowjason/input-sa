@@ -94,6 +94,26 @@ let mixedNumTable = DojoCorrectionTable(entries: [
 let n4 = mixedNumTable.correct("改刀系統有3粒", dojoMode: false)
 check(n4 == "道務系統有3例", "{num} and literal entries coexist", "got \(n4)")
 
+print("long-phrase exact entries (口頭修正 整句詞條):")
+// A full-sentence entry (16 chars, two mishearings inside) exercises the exact
+// layer's support for 口頭修正 sentence-level corrections, and a short entry
+// whose `wrong` is a substring of the long one confirms longest-first still wins.
+let longTable = DojoCorrectionTable(entries: [
+    DojoCorrectionTable.Entry(wrong: "感謝承蒙天恩師得浩大難抱答於萬一",
+                              correct: "感謝承蒙天恩師德浩大難報答於萬一", tier: "always"),
+    DojoCorrectionTable.Entry(wrong: "師得", correct: "師德", tier: "always"),
+])
+let L1 = longTable.correct("弟子感謝承蒙天恩師得浩大難抱答於萬一，叩謝", dojoMode: false)
+check(L1 == "弟子感謝承蒙天恩師德浩大難報答於萬一，叩謝",
+      "16-char sentence entry applies wholesale", "got \(L1)")
+
+// Longest-first: the long entry contains the short「師得」as a substring. The
+// long entry runs first and rewrites the whole phrase (incl 難抱答→難報答); if the
+// short entry fired first it would break the long entry's exact match. Here the
+// long form isn't present, so only the short entry legitimately fires.
+let L2 = longTable.correct("天恩師得普照", dojoMode: false)
+check(L2 == "天恩師德普照", "short entry fires independently when long entry doesn't match", "got \(L2)")
+
 print("")
 if failures == 0 {
     print("ALL TESTS PASSED")

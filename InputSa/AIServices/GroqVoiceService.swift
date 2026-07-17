@@ -124,6 +124,11 @@ final class GroqVoiceService: NSObject, VoiceServiceProtocol {
             body += "--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".utf8Data
         }
         field("model",           "whisper-large-v3-turbo")
+        // Pinned to "zh" (not auto-detect): logs show Whisper already emits the
+        // embedded English (commit/cloud/GitHub) as Latin text under a zh hint, so
+        // 中英夾雜 is covered without opening the door to whole-utterance language
+        // misdetection on the primary dictation path. Revisit only with real-world
+        // testing if English recall proves insufficient.
         field("language",        "zh")
         field("response_format", "json")
         // prompt: 給 Whisper 一個真實的語境提示，大幅降低無聲/安靜時的幻覺輸出

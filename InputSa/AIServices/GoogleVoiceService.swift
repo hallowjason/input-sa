@@ -114,10 +114,12 @@ final class GoogleVoiceService: NSObject, VoiceServiceProtocol {
                 "encoding":                   "LINEAR16",
                 "sampleRateHertz":            16000,
                 "audioChannelCount":          1,
-                // Primary: Traditional Chinese; alternative: Taiwanese Hokkien (nan-TW).
-                // Google STT automatically selects the best match per utterance.
+                // Primary: Traditional Chinese; alternatives: Taiwanese Hokkien
+                // (nan-TW) and US English (en-US) so 中英夾雜 utterances keep the
+                // English words as Latin text instead of being transliterated into
+                // odd Chinese. Google STT picks the best match per utterance.
                 "languageCode":               "zh-TW",
-                "alternativeLanguageCodes":   ["nan-TW"],
+                "alternativeLanguageCodes":   ["nan-TW", "en-US"],
                 "enableAutomaticPunctuation": true,
                 "model":                      "latest_long",
             ],
