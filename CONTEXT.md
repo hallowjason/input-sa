@@ -1,7 +1,7 @@
 # Session Context — 最後更新 2026-07-16（深夜第二輪）
 
 ## 🔵 目前狀態（一句話）
-**功能大輪完成並收尾：使用統計儀表板＋數字格式化＋五項實用功能＋實測回饋修復,全部通過 verifier＋使用者本機實測「沒問題了」,已 commit `ce52534`＋push。尚未發版（版號仍 2.3.0）——下一棒若使用者要發 2.4.0 走既有發版流程。划詞問答/串流落字有研究報告結論待使用者決定要不要做。**
+**功能大輪完成並收尾：使用統計儀表板＋數字格式化＋五項實用功能＋實測回饋修復,全部通過 verifier＋使用者本機實測「沒問題了」,已 commit＋push＋發 Release `v2.4.0`（zip 已上傳,版號 2.4.0 build 6,commit `5fb155b`）。無進行中任務;下一棒等使用者提需求,或推進三個已研究待點頭項（⌥P 死碼/HUD 串流預覽/划詞問答）。**
 
 ## ✅ 2026-07-16 深夜第二輪完成（功能大輪,commit `ce52534`）
 研究了 EthanYoQ/whisper-input（其實是 macOS Swift 專案 OpenLess 的 Tauri/Rust 移植,非 Python 名專案）,借鏡其儀表板設計後實作三批:
@@ -208,7 +208,7 @@ README.md / .gitignore                       ← 面向 GitHub 公開 repo
 - 下次改完程式碼要發新 Release：改版號（`InputSa/Resources/Info.plist` 的 `CFBundleShortVersionString`/`CFBundleVersion`）→ `./package-release.sh` → commit 版號 → push → `gh release create vX.Y.Z ...`
 
 ## 待辦 / 未決事項
-- **【下一棒最可能的第一件事】發版 2.4.0**：本輪功能已 commit push 但未發版。流程：改 Info.plist 版號 → `./package-release.sh` → commit 版號 → push → `gh release create v2.4.0 <zip>`
+- ~~發版 2.4.0~~ ✅ 已完成（https://github.com/hallowjason/input-sa/releases/tag/v2.4.0）。注意：使用者本機裝的是 install.sh 含模型版（發版前裝的,程式碼同 v2.4.0）
 - **【等使用者點頭】三個已研究未實作項**：①⌥P 選字潤飾死碼接上（小）②HUD 串流預覽升級（中）③划詞語音問答 v1（中大）——研究結論見上方本輪區塊
 - **【觀察中】Apple 本地幻覺防線實戰效果**：tight bound 若誤殺合理輸出（使用者回報「潤飾常變原稿」），調 `ApplePolishService.generateClean` 的 bound 參數
 - **【觀察中】「道親→道歉」類 STT 錯詞**：已建議使用者用右⇧口頭修正累積詞庫
