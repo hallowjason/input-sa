@@ -33,6 +33,7 @@ echo "   Target: $TARGET"
 SOURCES=(
     "$SRC/App/main.swift"
     "$SRC/App/AppDelegate.swift"
+    "$SRC/App/SelfDiagnostics.swift"
     "$SRC/InputMethod/InputController.swift"
     "$SRC/InputMethod/SelectionReader.swift"
     "$SRC/InputMethod/SelectionActions.swift"

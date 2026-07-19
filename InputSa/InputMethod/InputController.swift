@@ -1,6 +1,7 @@
 import AppKit
 import Carbon
 import ApplicationServices
+import AVFoundation
 
 /// CGEventTap-based controller for voice transcription and text polishing.
 /// No IMKit / TIS / Bopomofo — AI-powered features only.
@@ -55,6 +56,12 @@ final class InputController: NSObject {
     /// Bumps per HUD "flash" toast so a later real recording isn't hidden by a
     /// stale auto-hide timer.
     var hudFlashToken = 0
+    /// Loudest normalized level (0...1) seen during the current recording.
+    /// Near-zero after a full utterance means the mic never actually captured
+    /// audio (wrong input device, muted input, dead TCC grant) — used to turn a
+    /// generic transcription error into a pointed "check your input device" one.
+    /// Internal so SelectionActions' recording path can reset/track it too.
+    var peakRecordedLevel: Float = 0
     /// AX element that was focused when recording began — used for injection after API calls complete.
     private var recordingTargetElement: AXUIElement?
     private lazy var polishHUD: NSPanel = makePolishHUD()
@@ -419,8 +426,41 @@ final class InputController: NSObject {
 
     // MARK: - Voice Push-to-Talk
 
+    // MARK: - Mic readiness guard
+
+    /// Key-down gate shared by every recording entry point. Recording used to
+    /// fail silently when the mic grant was missing — the HUD showed a recording
+    /// state while no audio was ever captured (the classic "installed on another
+    /// Mac, waveform never moves" report). Explain immediately instead, and
+    /// offer the TCC repair flow.
+    func micReadyOrExplain() -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return true
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                inputSaLog("mic permission prompt from key-down → \(granted ? "granted" : "denied")")
+            }
+            flashHUDMessage("請先允許麥克風權限")
+            return false
+        default:
+            inputSaLog("mic not authorized at key-down — showing recovery dialog")
+            DispatchQueue.main.async { SelfDiagnostics.presentMicPermissionRecovery() }
+            return false
+        }
+    }
+
     private func handleVoiceKeyDown(keyCode: Int) {
+        guard micReadyOrExplain() else {
+            // Call sites set their PTT flag before calling in — clear them so the
+            // matching keyUp is a no-op instead of a stop-with-no-recording error.
+            optionKeyRecording = false;    optionRecordingStartTime = nil
+            translateKeyRecording = false; translateRecordingStartTime = nil
+            correctionKeyRecording = false; correctionRecordingStartTime = nil
+            return
+        }
         activeVoiceKeyCode = keyCode
+        peakRecordedLevel = 0
         recordingStartTime = Date()   // unified start for usage-stats duration
         recordingTargetElement = focusedElement()  // snapshot before HUD steals focus
         if APIKeyStore.shared.polishProvider == .apple {
@@ -432,7 +472,11 @@ final class InputController: NSObject {
             SystemAudioMute.shared.beginMute()
         }
         voiceService.onLevelUpdate = { [weak self] level in
-            DispatchQueue.main.async { self?.voiceHUD.updateAudioLevel(level) }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.peakRecordedLevel = max(self.peakRecordedLevel, level)
+                self.voiceHUD.updateAudioLevel(level)
+            }
         }
         voiceService.startRecording()
         voiceHUD.show(state: .recording, near: getCursorRect(), on: NSScreen.main)
@@ -453,7 +497,11 @@ final class InputController: NSObject {
                 switch result {
                 case .failure(let err):
                     self.voiceHUD.hide()
-                    self.showError("轉錄失敗：\(err.localizedDescription)")
+                    var message = "轉錄失敗：\(err.localizedDescription)"
+                    if self.peakRecordedLevel < 0.02 {
+                        message += "\n\n這次錄音從頭到尾幾乎無聲——麥克風可能沒有真正收到音。請從選單列圖示執行「系統診斷…」，或檢查「系統設定 › 聲音 › 輸入」的裝置與音量。"
+                    }
+                    self.showError(message)
                 case .success(let transcript):
                     // Spoken tail commands (「……請幫我翻譯成英文」) were removed
                     // 2026-07-06: dictated content that legitimately ends with such a

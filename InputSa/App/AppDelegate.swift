@@ -40,6 +40,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Pull the community-shared dojo vocabulary. Fire-and-forget and off the
         // transcription path — needs no Accessibility permission, only network.
         startSharedVocabSync()
+
+        // Fail fast on a broken install: the local model ships inside the app
+        // bundle, so a missing model is an install problem, not a user problem —
+        // surface it now instead of on the first transcription attempt.
+        if APIKeyStore.shared.voiceProvider == .sherpa && !SherpaVoiceService.modelInstalled {
+            inputSaLog("launch check: local model missing from bundle")
+            let alert = NSAlert()
+            alert.messageText = "安裝不完整"
+            alert.informativeText = "找不到本地語音模型（model.int8.onnx / tokens.txt）。請重新執行 install.sh 或重新下載完整安裝包。"
+            alert.runModal()
+        }
     }
 
     /// Sync the 共編詞庫 once at launch, then every 24h (this is a long-lived
@@ -100,6 +111,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(withTitle: "劃詞問答：選字後長按 Ctrl+Option+Q 說問題，浮窗顯示答案", action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "劃詞翻譯：選字後按 Ctrl+Option+T，浮窗顯示譯文", action: nil, keyEquivalent: "")
         menu.addItem(NSMenuItem.separator())
+        menu.addItem(withTitle: "系統診斷...", action: #selector(runDiagnostics), keyEquivalent: "")
+            .target = self
         menu.addItem(withTitle: "關於 Input-sa", action: #selector(showAbout), keyEquivalent: "")
             .target = self
         menu.addItem(NSMenuItem.separator())
@@ -161,6 +174,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.orderFrontStandardAboutPanel(nil)
     }
 
+    @objc private func runDiagnostics() {
+        SelfDiagnostics.presentReport()
+    }
+
     @objc private func quit() {
         NSApp.terminate(nil)
     }
@@ -176,26 +193,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AVCaptureDevice.requestAccess(for: .audio) { granted in
                 NSLog("[InputSa] Microphone permission: \(granted ? "granted" : "denied")")
                 if !granted {
-                    DispatchQueue.main.async { self.showMicrophonePermissionAlert() }
+                    DispatchQueue.main.async { SelfDiagnostics.presentMicPermissionRecovery() }
                 }
             }
         case .denied, .restricted:
+            // Includes the stale-TCC state (toggle shows ON but the grant no
+            // longer matches this binary's signature) — the recovery dialog
+            // offers the tccutil reset that actually fixes it.
             NSLog("[InputSa] Microphone permission: denied — voice input will not work")
-            showMicrophonePermissionAlert()
+            SelfDiagnostics.presentMicPermissionRecovery()
         @unknown default:
             break
-        }
-    }
-
-    private func showMicrophonePermissionAlert() {
-        let alert = NSAlert()
-        alert.messageText = "需要麥克風權限"
-        alert.informativeText = "Input-sa 需要麥克風權限才能使用語音輸入功能。\n\n請前往「系統設定 › 隱私與安全性 › 麥克風」，開啟 Input-sa 的存取權限，然後重新啟動 App。"
-        alert.addButton(withTitle: "開啟系統設定")
-        alert.addButton(withTitle: "稍後")
-        NSApp.activate(ignoringOtherApps: true)
-        if alert.runModal() == .alertFirstButtonReturn {
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
         }
     }
 }

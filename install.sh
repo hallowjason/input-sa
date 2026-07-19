@@ -68,11 +68,25 @@ chmod -R 755 "$INSTALL_DIR/$APP_NAME.app"
 # 7. Remove quarantine xattr
 xattr -rd com.apple.quarantine "$INSTALL_DIR/$APP_NAME.app" 2>/dev/null || true
 
-# 7.5 Reset TCC microphone entry so macOS re-prompts on next launch.
-# Opt-in only (./install.sh --reset-mic) — the signing identity (team id
-# 5X94884GN9) is stable across rebuilds, so the mic grant survives reinstalls
-# and resetting it every time just makes you re-approve for no reason.
-if [ "$1" = "--reset-mic" ]; then
+# 7.5 TCC hygiene. macOS ties the microphone grant to the app's code signature:
+# with a real Apple Development identity the signature is stable across rebuilds
+# and the grant survives, so resetting is opt-in (./install.sh --reset-mic).
+# With the ad-hoc fallback ("-") every build produces a NEW signature — the old
+# grant silently stops matching while the toggle in System Settings still shows
+# ON, and recording captures nothing. Reset proactively in that case so macOS
+# re-prompts instead of failing silently.
+if [ "$SIGN_ID" = "-" ]; then
+    echo ""
+    echo "⚠️  找不到 Apple Development 憑證，已改用 ad-hoc 簽名。"
+    echo "   ad-hoc 簽章每次重新安裝都會改變，舊的權限授權會失效"
+    echo "   （系統設定裡開關看起來仍是開啟，實際上已對不上）。"
+    echo "🔐 已自動重置麥克風授權——首次錄音時系統會重新詢問，請按「允許」。"
+    tccutil reset Microphone com.inputsa.inputmethod 2>/dev/null || true
+    echo "   若快捷鍵或聲波仍無反應：到「系統設定 › 隱私權與安全性」的"
+    echo "   「輔助使用」與「輸入監控」，把 Input-sa 移除（－）再重新加入（＋），"
+    echo "   不要只看開關顏色；或用選單列 🎙 →「系統診斷...」檢查。"
+    echo ""
+elif [ "$1" = "--reset-mic" ]; then
     echo "🔐 Resetting microphone TCC permission (so macOS re-prompts)..."
     tccutil reset Microphone com.inputsa.inputmethod 2>/dev/null || true
 fi

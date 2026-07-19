@@ -17,8 +17,10 @@ extension InputController {
             flashHUDMessage("沒有選取文字")
             return
         }
+        guard micReadyOrExplain() else { return }
         qaSelectedText = selection
         qaKeyRecording = true
+        peakRecordedLevel = 0
         selectionActionCursor = getCursorRect()
         recordingStartTime = Date()
 
@@ -26,7 +28,11 @@ extension InputController {
             SystemAudioMute.shared.beginMute()
         }
         voiceService.onLevelUpdate = { [weak self] level in
-            DispatchQueue.main.async { self?.voiceHUD.updateAudioLevel(level) }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.peakRecordedLevel = max(self.peakRecordedLevel, level)
+                self.voiceHUD.updateAudioLevel(level)
+            }
         }
         voiceService.startRecording()
         voiceHUD.recordingCaption = "問題錄音中"

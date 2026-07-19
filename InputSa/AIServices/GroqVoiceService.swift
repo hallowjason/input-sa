@@ -11,6 +11,7 @@ final class GroqVoiceService: NSObject, VoiceServiceProtocol {
     private var recordingURL: URL?
     private var recordingStartTime: Date?
     private var micPermissionDenied = false
+    private var recordStartFailed = false
     private let levelMeter = AudioLevelMeter()
     var onLevelUpdate: ((Float) -> Void)? {
         get { levelMeter.onLevel }
@@ -35,6 +36,7 @@ final class GroqVoiceService: NSObject, VoiceServiceProtocol {
             return
         }
         micPermissionDenied = false
+        recordStartFailed = false
 
         let tmpURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("inputsa_voice_\(Int(Date().timeIntervalSince1970)).m4a")
@@ -49,10 +51,16 @@ final class GroqVoiceService: NSObject, VoiceServiceProtocol {
         ]
         do {
             audioRecorder = try AVAudioRecorder(url: tmpURL, settings: settings)
-            audioRecorder?.record()
-            if let recorder = audioRecorder { levelMeter.start(recorder: recorder) }
+            if audioRecorder?.record() == true {
+                if let recorder = audioRecorder { levelMeter.start(recorder: recorder) }
+            } else {
+                inputSaLog("Groq: AVAudioRecorder.record() returned false — no usable input device?")
+                recordStartFailed = true
+                audioRecorder = nil
+            }
         } catch {
-            NSLog("[InputSa] Recording failed to start: \(error)")
+            inputSaLog("Groq recording failed to start: \(error)")
+            recordStartFailed = true
         }
     }
 
@@ -72,6 +80,13 @@ final class GroqVoiceService: NSObject, VoiceServiceProtocol {
         levelMeter.stop()
         guard !micPermissionDenied else {
             completion(.failure(Err("麥克風權限未授權。請至「系統設定 › 隱私與安全性 › 麥克風」開啟 Input-sa 存取權限。")))
+            return
+        }
+        guard !recordStartFailed else {
+            if let url = recordingURL { try? FileManager.default.removeItem(at: url) }
+            recordingURL = nil
+            recordingStartTime = nil
+            completion(.failure(Err("錄音無法啟動——請檢查「系統設定 › 聲音 › 輸入」是否有可用的麥克風。")))
             return
         }
 
