@@ -66,6 +66,7 @@ SOURCES=(
     "$SRC/UI/AnswerPanelController.swift"
     "$SRC/UI/PolishPreviewController.swift"
     "$SRC/Preferences/ShortcutRecorderView.swift"
+    "$SRC/Preferences/ShortcutSettings.swift"
     "$SRC/Preferences/EditorSheets.swift"
     "$SRC/Preferences/PreferencesSidebar.swift"
     "$SRC/Preferences/PreferencesWindowController.swift"

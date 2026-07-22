@@ -12,12 +12,15 @@ extension InputController {
 
     /// Q went down: capture the selection now (before the mic opens), then start
     /// recording the spoken question. No selection ⇒ a brief toast, no recording.
-    func startSelectionQA() {
+    /// Returns whether recording actually started, so the generic hold dispatch
+    /// can clear its active-action state when this bails out early.
+    @discardableResult
+    func startSelectionQA() -> Bool {
         guard let selection = SelectionReader.read() else {
             flashHUDMessage("沒有選取文字")
-            return
+            return false
         }
-        guard micReadyOrExplain() else { return }
+        guard micReadyOrExplain() else { return false }
         qaSelectedText = selection
         qaKeyRecording = true
         peakRecordedLevel = 0
@@ -38,6 +41,7 @@ extension InputController {
         voiceHUD.recordingCaption = "問題錄音中"
         voiceHUD.show(state: .recording, near: selectionActionCursor ?? getCursorRect(),
                       on: NSScreen.main)
+        return true
     }
 
     /// Q released: stop recording, transcribe the question, ask Gemini, show the

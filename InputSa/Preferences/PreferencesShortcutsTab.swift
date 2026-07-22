@@ -1,78 +1,64 @@
 import AppKit
 
-/// 快捷鍵 pane — shortcut overview, optional custom dictation shortcut, and
-/// appearance/language pickers. Same controls and actions as always; the
-/// 2026-07-16 v3 redesign flipped the overview to the native register:
-/// action name + description left, key-cap chips right.
+/// 快捷鍵 pane — every one of the seven actions is now user-rebindable. Each row
+/// pairs the action's name + description with a `ShortcutRecorderView`; a hold
+/// action shows a muted「長按」hint. A reset button restores all defaults, and a
+/// warning line flags conflicts or an unmodified bare key that would fire during
+/// normal typing.
 extension PreferencesWindowController {
 
     func makeShortcutsContent() -> NSView {
-        // ── Group 1: 快捷鍵總覽 ───────────────────────────────
-        let overviewRows: [(name: String, desc: String, keys: [String], suffix: String?)] = [
-            ("語音聽寫", "說話 → 轉錄 → AI 潤飾 → 輸出至游標", ["右 ⌥"], "長按"),
-            ("即時翻譯", "說中文，翻譯成目標語言輸出", ["右 ⌘"], "長按"),
-            ("口頭修正", "說詞條釋義，Enter 確認加入道場詞庫", ["右 ⇧"], "長按"),
-            ("選字潤飾", "選取文字後按，Enter 接受、Esc 取消", ["⌥", "P"], nil),
-            ("劃詞問答", "選取文字後按住說問題，放開顯示答案", ["⌃", "⌥", "Q"], "長按"),
-            ("劃詞翻譯", "選取文字後按，浮窗顯示譯文（英／泰）", ["⌃", "⌥", "T"], nil),
-            ("偏好設定", "開啟本視窗", ["⌃", "⌥", "P"], nil),
-        ]
-        let overviewCard = DesignTokens.groupCard(overviewRows.map { row in
-            DesignTokens.row(title: row.name, subtitle: row.desc,
-                             control: keycapCluster(keys: row.keys, suffix: row.suffix))
-        })
-
-        // ── Group 2: 自訂聽寫快捷鍵（optional override）────────
-        voiceRecorder = ShortcutRecorderView(frame: NSRect(x: 0, y: 0, width: 140, height: 28))
-        voiceRecorder.setShortcut(PreferencesWindowController.voiceShortcut)
-        voiceRecorder.onChange = { [weak self] sc in
-            PreferencesWindowController.voiceShortcut = sc
-            self?.updateShortcutWarning()
+        // ── Group 1: 快捷鍵（可自訂）──────────────────────────
+        shortcutRecorders.removeAll()
+        let shortcutRows: [NSView] = ShortcutAction.allCases.map { action in
+            let recorder = ShortcutRecorderView(frame: NSRect(x: 0, y: 0, width: 140, height: 28))
+            recorder.setShortcut(ShortcutSettings.shared.shortcut(for: action))
+            recorder.onChange = { [weak self] sc in
+                ShortcutSettings.shared.set(sc, for: action)
+                self?.updateShortcutWarning()
+            }
+            shortcutRecorders[action] = recorder
+            return DesignTokens.row(title: action.titleZh, subtitle: action.subtitleZh,
+                                    control: recorderControl(recorder, hold: action.isHold))
         }
+        let shortcutCard = DesignTokens.groupCard(shortcutRows)
 
-        let clearBtn = DesignTokens.pushButton(title: "清除", target: self,
-                                               action: #selector(clearVoiceShortcut))
-        let recorderRow = NSStackView(views: [voiceRecorder, clearBtn])
-        recorderRow.orientation = .horizontal
-        recorderRow.spacing = 8
-        recorderRow.alignment = .centerY
+        let resetButton = DesignTokens.pushButton(title: "還原預設", target: self,
+                                                  action: #selector(resetAllShortcuts))
+        let resetRow = NSStackView(views: [resetButton])
+        resetRow.orientation = .horizontal
+        resetRow.alignment = .centerY
 
-        let overrideCard = DesignTokens.groupCard([
-            DesignTokens.row(title: "快捷鍵", subtitle: "設定後取代右 Option 長按",
-                             control: recorderRow),
-        ])
-        let overrideHint = DesignTokens.caption(
-            "可錄製含無修飾鍵的單鍵；按 ⎋ 取消錄製。點「清除」恢復右 Option 長按預設。")
+        let hint = DesignTokens.caption(
+            "點任一格 → 按下想要的鍵。長按型（聽寫／翻譯／口頭修正／劃詞問答）可只按單顆修飾鍵（如右 ⌥）；按 ⎋ 取消錄製。")
 
-        // Only visible when the saved shortcut has zero modifiers — that key will fire
-        // system-wide on every matching keystroke, including normal typing in any app.
-        shortcutWarningLabel = NSTextField(wrappingLabelWithString:
-            "⚠ 這是不含修飾鍵的單一按鍵，日常打字打到這個鍵時也會觸發語音錄音，請確認這是你要的。")
+        // Conflict / unmodified-key warning (hidden unless something needs attention).
+        shortcutWarningLabel = NSTextField(wrappingLabelWithString: "")
         shortcutWarningLabel.font = DesignTokens.uiFont(11, weight: .medium)
         shortcutWarningLabel.textColor = DesignTokens.Palette.statusWarn
         shortcutWarningLabel.preferredMaxLayoutWidth = DesignTokens.contentWidth - 8
         shortcutWarningLabel.isHidden = true
 
-        // ── Group 3: 外觀與語言 ───────────────────────────────
+        // ── Group 2: 外觀與語言 ───────────────────────────────
         let appearanceCard = DesignTokens.groupCard([
             DesignTokens.row(title: "翻譯目標語言", control: makeTranslatePopUp()),
             DesignTokens.row(title: "HUD 神佛角色", control: makeCharacterPopUp()),
         ])
 
         // ── Assemble ─────────────────────────────────────────
-        let overrideGroup = NSStackView(views: [
-            DesignTokens.group(title: "自訂聽寫快捷鍵", card: overrideCard, footnote: overrideHint),
+        let shortcutGroup = NSStackView(views: [
+            DesignTokens.group(title: "快捷鍵", card: shortcutCard, footnote: hint),
+            resetRow,
             shortcutWarningLabel,
         ])
-        overrideGroup.orientation = .vertical
-        overrideGroup.alignment = .leading
-        overrideGroup.spacing = 7
-        overrideGroup.arrangedSubviews.first!.widthAnchor.constraint(
-            equalTo: overrideGroup.widthAnchor).isActive = true
+        shortcutGroup.orientation = .vertical
+        shortcutGroup.alignment = .leading
+        shortcutGroup.spacing = 7
+        shortcutGroup.arrangedSubviews.first!.widthAnchor.constraint(
+            equalTo: shortcutGroup.widthAnchor).isActive = true
 
         let stack = NSStackView(views: [
-            DesignTokens.group(title: "快捷鍵總覽", card: overviewCard),
-            overrideGroup,
+            shortcutGroup,
             DesignTokens.group(title: "外觀與語言", card: appearanceCard),
         ])
         stack.orientation = .vertical
@@ -87,29 +73,58 @@ extension PreferencesWindowController {
         return stack
     }
 
-    /// Trailing key-cap cluster: one chip per key, optional muted suffix（長按）.
-    private func keycapCluster(keys: [String], suffix: String?) -> NSView {
-        var views: [NSView] = keys.map { DesignTokens.keycap($0) }
-        if let suffix {
-            views.append(DesignTokens.styledLabel(
-                suffix, size: 11, weight: .regular, kern: -0.1,
-                color: DesignTokens.Palette.inkMuted(0.35)))
-        }
-        let cluster = NSStackView(views: views)
+    /// Recorder + optional muted「長按」hint for hold (push-to-talk) actions.
+    private func recorderControl(_ recorder: ShortcutRecorderView, hold: Bool) -> NSView {
+        guard hold else { return recorder }
+        let holdLabel = DesignTokens.styledLabel(
+            "長按", size: 11, weight: .regular, kern: -0.1,
+            color: DesignTokens.Palette.inkMuted(0.35))
+        let cluster = NSStackView(views: [recorder, holdLabel])
         cluster.orientation = .horizontal
         cluster.alignment = .centerY
-        cluster.spacing = 5
+        cluster.spacing = 6
         return cluster
     }
 
-    /// Shows the "unmodified single key" warning only when a shortcut is saved AND
-    /// it has zero modifier flags.
+    /// Warn on (a) two actions bound to the same keys, or (b) a bare key with no
+    /// modifiers, which would trigger during ordinary typing anywhere.
     func updateShortcutWarning() {
-        if let sc = PreferencesWindowController.voiceShortcut {
-            shortcutWarningLabel.isHidden = sc.modifierFlags != 0
-        } else {
-            shortcutWarningLabel.isHidden = true
+        guard shortcutWarningLabel != nil else { return }
+        var messages: [String] = []
+
+        // Conflicts: report each colliding pair once.
+        var seen: [ShortcutAction] = []
+        for action in ShortcutAction.allCases {
+            let sc = ShortcutSettings.shared.shortcut(for: action)
+            if let other = ShortcutSettings.shared.conflictingAction(for: sc, excluding: action),
+               !seen.contains(other) {
+                messages.append("「\(action.titleZh)」和「\(other.titleZh)」設成了同一個鍵（\(sc.displayString)），只有一個會生效。")
+            }
+            seen.append(action)
         }
+
+        // Unmodified bare key (a combo with zero modifiers, not a modifier-only chord).
+        for action in ShortcutAction.allCases {
+            let sc = ShortcutSettings.shared.shortcut(for: action)
+            if !sc.isModifierOnly && sc.modifierFlags == 0 {
+                messages.append("「\(action.titleZh)」設成了不含修飾鍵的單一按鍵（\(sc.displayString)），日常打字打到這個鍵時也會觸發。")
+            }
+        }
+
+        if messages.isEmpty {
+            shortcutWarningLabel.isHidden = true
+        } else {
+            shortcutWarningLabel.stringValue = "⚠ " + messages.joined(separator: "\n⚠ ")
+            shortcutWarningLabel.isHidden = false
+        }
+    }
+
+    @objc private func resetAllShortcuts() {
+        ShortcutSettings.shared.resetAll()
+        for (action, recorder) in shortcutRecorders {
+            recorder.setShortcut(ShortcutSettings.shared.shortcut(for: action))
+        }
+        updateShortcutWarning()
     }
 
     /// Common translate targets. Gemini's translate prompt takes this string
@@ -137,12 +152,6 @@ extension PreferencesWindowController {
         let idx = sender.indexOfSelectedItem
         guard idx >= 0, idx < HUDCharacter.allCases.count else { return }
         HUDCharacter.current = HUDCharacter.allCases[idx]
-    }
-
-    @objc private func clearVoiceShortcut() {
-        PreferencesWindowController.voiceShortcut = nil
-        voiceRecorder?.setShortcut(nil)
-        updateShortcutWarning()
     }
 
     @objc private func translateLangChanged() {

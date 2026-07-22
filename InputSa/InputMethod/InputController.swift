@@ -19,19 +19,20 @@ final class InputController: NSObject {
     private var runLoopSource: CFRunLoopSource?
 
     // MARK: - State
-    /// Tracks the key code of the voice key being held; nil when not recording.
-    /// Using key code (not modifier flags) avoids a missed keyUp when the modifier is released first.
-    private var activeVoiceKeyCode: Int? = nil
-    /// True when recording is triggered by Option-alone PTT (flagsChanged path), not a key combo.
-    private var optionKeyRecording = false
-    /// Timestamp when Option-PTT recording started — used to debounce spurious rapid flagsChanged.
-    private var optionRecordingStartTime: Date?
-    /// True when recording is triggered by right-Command translate PTT (中文說話 → 翻譯後注入).
-    private var translateKeyRecording = false
-    private var translateRecordingStartTime: Date?
-    /// True when recording is triggered by right-Shift 口頭修正 PTT (說出詞條釋義 → 解析 → 入庫).
-    private var correctionKeyRecording = false
-    private var correctionRecordingStartTime: Date?
+    /// A modifier-only chord (e.g. hold right-Option) currently recording via the
+    /// flagsChanged path; nil when no modifier-hold action is active. At most one
+    /// modifier-hold action runs at a time.
+    private var activeModifierHoldAction: ShortcutAction?
+    /// Wall-clock start of the modifier-hold press, to debounce macOS' occasional
+    /// double flagsChanged on a single physical key event.
+    private var modifierHoldStartTime: Date?
+    /// A key-combo (e.g. ⌃⌥Q) hold currently recording via the keyDown/keyUp
+    /// path, plus the physical key it owns entirely until release.
+    private var activeKeyHoldAction: ShortcutAction?
+    private var activeKeyHoldKeyCode: Int?
+    /// Effective binding for every action, snapshotted from ShortcutSettings and
+    /// refreshed on any UserDefaults change (i.e. right after the user edits one).
+    private var cachedShortcuts: [ShortcutAction: ShortcutRecorderView.Shortcut] = [:]
     /// Voice-parsed dojo entry awaiting the user's Enter (save) / Esc (discard).
     private var pendingDojoEntry: DojoCorrectionTable.Entry?
     /// Wall-clock start of the current recording, captured in handleVoiceKeyDown.
@@ -66,16 +67,11 @@ final class InputController: NSObject {
     private var recordingTargetElement: AXUIElement?
     private lazy var polishHUD: NSPanel = makePolishHUD()
     private var polishHUDLabel: NSTextField?
-    /// Cached voice shortcut so UserDefaults + JSONDecoder are NOT touched on every keypress.
-    private var cachedVoiceShortcut: ShortcutRecorderView.Shortcut?
 
     // Key codes (Carbon kVK_* values)
     private let kVKReturn: Int = 36
     private let kVKTab:    Int = 48
     private let kVKEscape: Int = 53
-    private let kVKP:      Int = 35   // 'p' — Ctrl+Option+P opens preferences / ⌥P polishes selection
-    let kVKQ:      Int = 12   // 'q' — Ctrl+Option+Q 劃詞問答 (hold to speak)
-    let kVKT:      Int = 17   // 't' — Ctrl+Option+T 劃詞翻譯 (single press)
 
     // MARK: - Start / Stop
     func start() {
@@ -139,16 +135,10 @@ final class InputController: NSObject {
     }
 
     private func refreshShortcutCache() {
-        let sc = PreferencesWindowController.voiceShortcut
-        // Migration: discard the legacy Option+V default (keyCode 9, only Option modifier).
-        // The new default is Option-alone PTT via flagsChanged — no stored shortcut needed.
-        if let sc = sc, sc.keyCode == 9,
-           sc.modifierFlags == NSEvent.ModifierFlags.option.rawValue {
-            PreferencesWindowController.voiceShortcut = nil
-            cachedVoiceShortcut = nil
-        } else {
-            cachedVoiceShortcut = sc
-        }
+        // Snapshot every action's effective binding so the event tap never touches
+        // UserDefaults/JSONDecoder on the hot keypress path. Refreshed on any
+        // UserDefaults change, so edits in Preferences take effect immediately.
+        cachedShortcuts = ShortcutSettings.shared.snapshot()
     }
 
     private func refreshVoiceService() {
@@ -187,93 +177,13 @@ final class InputController: NSObject {
         let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
         let flags   = event.flags
 
-        // ── Right-Option key walkie-talkie PTT (default when no custom shortcut configured)
-        //    Hold the RIGHT Option alone → record; release → transcribe.
-        //    The LEFT Option (keyCode 58) is intentionally ignored so it keeps its
-        //    native macOS behavior (special characters, app shortcuts). Only the right
-        //    Option (keyCode 61 / kVK_RightOption) starts recording.
+        // ── Modifier-only chord engine (flagsChanged): drives every action bound
+        //    to a bare modifier hold. Defaults: right-⌥ dictation, right-⌘
+        //    translate, right-⇧ 口頭修正 — but any of the seven can be rebound to
+        //    a bare modifier, so this is entirely data-driven from cachedShortcuts.
+        //    Left-side modifiers keep native macOS behaviour unless a user picks one.
         if type == .flagsChanged {
-            let rightOptionKeyCode  = 61   // kVK_RightOption (left Option = 58)
-            let rightCommandKeyCode = 54   // kVK_RightCommand (left Command = 55)
-            let rightShiftKeyCode   = 60   // kVK_RightShift (left Shift = 56)
-            let optionDown  = flags.contains(.maskAlternate)
-            let commandDown = flags.contains(.maskCommand)
-            let shiftDown   = flags.contains(.maskShift)
-            let pureOption = optionDown
-                && !flags.contains(.maskCommand)
-                && !flags.contains(.maskControl)
-                && !flags.contains(.maskShift)
-            let pureCommand = commandDown
-                && !flags.contains(.maskAlternate)
-                && !flags.contains(.maskControl)
-                && !flags.contains(.maskShift)
-            let pureShift = shiftDown
-                && !flags.contains(.maskAlternate)
-                && !flags.contains(.maskControl)
-                && !flags.contains(.maskCommand)
-
-            // Right-Option transcription PTT (only when no custom shortcut configured)
-            if cachedVoiceShortcut == nil {
-                if pureOption && keyCode == rightOptionKeyCode
-                    && !optionKeyRecording && !translateKeyRecording && !correctionKeyRecording
-                    && !qaKeyRecording && activeVoiceKeyCode == nil {
-                    optionKeyRecording = true
-                    optionRecordingStartTime = Date()
-                    handleVoiceKeyDown(keyCode: keyCode)
-                } else if !optionDown && optionKeyRecording {
-                    // Debounce: ignore spurious rapid flagsChanged within 300 ms of recording start.
-                    // Some macOS versions fire two back-to-back flagsChanged events on a single key press.
-                    let held = optionRecordingStartTime.map { Date().timeIntervalSince($0) } ?? 1.0
-                    if held >= 0.3 {
-                        optionKeyRecording = false
-                        optionRecordingStartTime = nil
-                        handleVoiceKeyUp()
-                    } else {
-                        NSLog("[InputSa] flagsChanged: Option released too quickly (%.2fs) — debounced", held)
-                    }
-                }
-            }
-
-            // Right-Command translate PTT: hold → speak Chinese → release → inject translation.
-            // A keyDown while holding (e.g. right-Cmd+C combo) cancels the recording — see below.
-            if pureCommand && keyCode == rightCommandKeyCode
-                && !translateKeyRecording && !optionKeyRecording && !correctionKeyRecording
-                && !qaKeyRecording && activeVoiceKeyCode == nil {
-                translateKeyRecording = true
-                translateRecordingStartTime = Date()
-                handleVoiceKeyDown(keyCode: keyCode)
-            } else if !commandDown && translateKeyRecording {
-                let held = translateRecordingStartTime.map { Date().timeIntervalSince($0) } ?? 1.0
-                if held >= 0.3 {
-                    translateKeyRecording = false
-                    translateRecordingStartTime = nil
-                    handleVoiceKeyUp(translate: true)
-                } else {
-                    NSLog("[InputSa] flagsChanged: Command released too quickly (%.2fs) — debounced", held)
-                }
-            }
-
-            // Right-Shift 口頭修正 PTT: hold → speak a vocabulary clarification
-            // (「崇正寶宮的崇是崇高的崇…」) → release → parse → Enter to save.
-            // Typing a capital with right-Shift held fires a keyDown, which cancels
-            // the recording below — same combo-cancel contract as right-Command.
-            if pureShift && keyCode == rightShiftKeyCode
-                && !correctionKeyRecording && !translateKeyRecording && !optionKeyRecording
-                && !qaKeyRecording && activeVoiceKeyCode == nil {
-                correctionKeyRecording = true
-                correctionRecordingStartTime = Date()
-                handleVoiceKeyDown(keyCode: keyCode)
-            } else if !shiftDown && correctionKeyRecording {
-                let held = correctionRecordingStartTime.map { Date().timeIntervalSince($0) } ?? 1.0
-                if held >= 0.3 {
-                    correctionKeyRecording = false
-                    correctionRecordingStartTime = nil
-                    handleVoiceKeyUp(correction: true)
-                } else {
-                    NSLog("[InputSa] flagsChanged: Shift released too quickly (%.2fs) — debounced", held)
-                }
-            }
-
+            handleModifierChordChange(keyCode: keyCode, flags: flags)
             return Unmanaged.passRetained(event)
         }
 
@@ -295,11 +205,15 @@ final class InputController: NSObject {
             return Unmanaged.passRetained(event)
         }
 
-        // ── 劃詞問答 (⌃⌥Q): own the Q key entirely while recording so autorepeat
-        //    keyDowns and the terminal keyUp don't leak a 'q' into the document.
-        //    keyUp (modifiers may already be released) ends the recording.
-        if qaKeyRecording && keyCode == kVKQ {
-            if type == .keyUp { finishSelectionQA() }
+        // ── Key-combo hold ownership: while a key-hold action records, own its
+        //    key entirely — swallow autorepeat keyDowns and catch the keyUp that
+        //    ends recording — so e.g. a held 'Q' (劃詞問答 ⌃⌥Q) never leaks a
+        //    character into the document. Applies to whatever key it's bound to.
+        if let action = activeKeyHoldAction, keyCode == activeKeyHoldKeyCode {
+            if type == .keyUp {
+                clearActiveKeyHoldState()
+                stopHoldAction(action)
+            }
             return nil
         }
 
@@ -321,97 +235,170 @@ final class InputController: NSObject {
             return Unmanaged.passRetained(event)
         }
 
-        // ── Cancel translate / correction PTT when the held modifier turns out to
-        //    be a combo (right-Cmd+C, right-Shift+letter): discard the recording,
-        //    let the combo through.
-        if type == .keyDown && (translateKeyRecording || correctionKeyRecording) {
-            translateKeyRecording = false
-            translateRecordingStartTime = nil
-            correctionKeyRecording = false
-            correctionRecordingStartTime = nil
-            activeVoiceKeyCode = nil
-            SystemAudioMute.shared.endMute()   // restore speaker on the combo-cancel path
-            voiceService.cancelRecording()
-            voiceHUD.hide()
+        // ── Cancel an in-progress modifier-hold PTT when the held modifier turns
+        //    out to be part of a combo (right-⌘+C, right-⇧+letter): discard the
+        //    recording and let the combo through.
+        if type == .keyDown, let active = activeModifierHoldAction {
+            clearActiveHoldState()
+            cancelActiveRecording(for: active)
             return Unmanaged.passRetained(event)
         }
 
-        // ── Ctrl+Option+P: open preferences
-        if type == .keyDown && keyCode == kVKP
-            && flags.contains(.maskControl) && flags.contains(.maskAlternate) {
-            DispatchQueue.main.async {
-                PreferencesWindowController.shared.showPreferences()
-                NSApp.activate(ignoringOtherApps: true)
+        // ── Data-driven key-combo dispatch (keyDown): match the pressed key +
+        //    modifiers against every action bound to a key combo (not a bare
+        //    modifier). Exact modifier match, so ⌃⌥⇧Q never fires ⌃⌥Q; press
+        //    actions ignore autorepeat, hold actions start once then own the key.
+        if type == .keyDown {
+            let autorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+            if let action = matchingKeyComboAction(keyCode: keyCode, flags: flags, autorepeat: autorepeat) {
+                dispatchKeyCombo(action, keyCode: keyCode)
+                return nil
             }
-            return nil
-        }
-
-        // ── ⌥P (Option alone, no Ctrl/Shift/Cmd): polish the current selection.
-        //    Skipped mid-recording so right-Option dictation (which holds the
-        //    Option flag) isn't hijacked, and autorepeat is ignored.
-        if type == .keyDown && keyCode == kVKP
-            && flags.contains(.maskAlternate)
-            && !flags.contains(.maskControl) && !flags.contains(.maskShift)
-            && !flags.contains(.maskCommand)
-            && !isAnyRecordingActive
-            && event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
-            triggerManualPolish()
-            return nil
-        }
-
-        // ── ⌃⌥Q: 劃詞問答 — capture selection + start recording on keyDown.
-        //    Autorepeat / keyUp are owned by the qaKeyRecording branch above.
-        if type == .keyDown && keyCode == kVKQ
-            && flags.contains(.maskControl) && flags.contains(.maskAlternate)
-            && !flags.contains(.maskShift) && !flags.contains(.maskCommand)
-            && !qaKeyRecording {
-            if !isAnyRecordingActive { startSelectionQA() }
-            return nil   // swallow the combo either way (never types 'q')
-        }
-
-        // ── ⌃⌥T: 劃詞翻譯 — single press. Ignore autorepeat so a held key
-        //    doesn't fire the translation repeatedly.
-        if type == .keyDown && keyCode == kVKT
-            && flags.contains(.maskControl) && flags.contains(.maskAlternate)
-            && !flags.contains(.maskShift) && !flags.contains(.maskCommand)
-            && event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
-            if !isAnyRecordingActive { triggerSelectionTranslate() }
-            return nil
-        }
-
-        // ── Voice push-to-talk keyDown (only when user has set a custom shortcut)
-        if type == .keyDown && activeVoiceKeyCode == nil,
-           let sc = cachedVoiceShortcut,
-           matchesShortcut(sc, keyCode: keyCode, flags: flags) {
-            handleVoiceKeyDown(keyCode: keyCode)
-            return nil
-        }
-
-        // ── Voice push-to-talk keyUp (custom shortcut path only)
-        if type == .keyUp, let active = activeVoiceKeyCode, keyCode == active,
-           !optionKeyRecording, !translateKeyRecording {
-            handleVoiceKeyUp()
-            return nil
         }
 
         return Unmanaged.passRetained(event)
     }
 
-    // MARK: - Shortcut Matching
-    /// Matches a user-configured shortcut against the current key event.
-    /// Returns false when no shortcut is configured — Option-alone PTT handles the default case.
-    private func matchesShortcut(
-        _ configured: ShortcutRecorderView.Shortcut,
-        keyCode: Int,
-        flags: CGEventFlags
-    ) -> Bool {
-        let relevant = flags.rawValue & (
-            CGEventFlags.maskControl.rawValue   |
-            CGEventFlags.maskAlternate.rawValue |
-            CGEventFlags.maskShift.rawValue     |
-            CGEventFlags.maskCommand.rawValue
-        )
-        return Int(configured.keyCode) == keyCode && configured.modifierFlags == UInt(relevant)
+    // MARK: - Data-driven shortcut dispatch
+
+    /// The four device-independent modifier bits currently held, as an
+    /// NSEvent.ModifierFlags rawValue (the form shortcuts are stored in).
+    private func nsModifierMask(from flags: CGEventFlags) -> UInt {
+        var m: NSEvent.ModifierFlags = []
+        if flags.contains(.maskShift)     { m.insert(.shift) }
+        if flags.contains(.maskControl)   { m.insert(.control) }
+        if flags.contains(.maskAlternate) { m.insert(.option) }
+        if flags.contains(.maskCommand)   { m.insert(.command) }
+        return m.rawValue
+    }
+
+    /// Whether the bare modifier a modifier-only shortcut is bound to is still down.
+    private func modifierStillHeld(_ sc: ShortcutRecorderView.Shortcut, in flags: CGEventFlags) -> Bool {
+        (nsModifierMask(from: flags) & sc.modifierFlags) != 0
+    }
+
+    /// First action (registry order) whose modifier-only binding exactly matches
+    /// this bare-modifier press. Exact keyCode + mask, so a two-modifier press
+    /// never triggers a single-modifier chord.
+    private func matchingModifierOnlyAction(keyCode: Int, mask: UInt) -> ShortcutAction? {
+        for action in ShortcutAction.allCases {
+            guard let sc = cachedShortcuts[action], sc.isModifierOnly else { continue }
+            if Int(sc.keyCode) == keyCode && sc.modifierFlags == mask { return action }
+        }
+        return nil
+    }
+
+    /// First action whose key-combo binding matches this keyDown. Press actions
+    /// ignore autorepeat; hold actions match on the first press (later autorepeat
+    /// is caught by the key-ownership branch once recording starts).
+    private func matchingKeyComboAction(keyCode: Int, flags: CGEventFlags,
+                                        autorepeat: Bool) -> ShortcutAction? {
+        let mask = nsModifierMask(from: flags)
+        for action in ShortcutAction.allCases {
+            guard let sc = cachedShortcuts[action], !sc.isModifierOnly else { continue }
+            guard Int(sc.keyCode) == keyCode && sc.modifierFlags == mask else { continue }
+            if !action.isHold && autorepeat { continue }
+            return action
+        }
+        return nil
+    }
+
+    /// flagsChanged engine for modifier-only chord shortcuts. At most one
+    /// modifier-hold action is active; it starts when its bare modifier goes down
+    /// and ends (or fires, for a press action) on release, with a 300 ms debounce
+    /// that absorbs macOS' occasional double flagsChanged on a single press.
+    private func handleModifierChordChange(keyCode: Int, flags: CGEventFlags) {
+        if let active = activeModifierHoldAction, let sc = cachedShortcuts[active] {
+            if !modifierStillHeld(sc, in: flags) {
+                let held = modifierHoldStartTime.map { Date().timeIntervalSince($0) } ?? 1.0
+                if active.isHold && held < 0.3 {
+                    NSLog("[InputSa] modifier released too quickly (%.2fs) — debounced", held)
+                    return   // spurious double event; keep waiting for the real release
+                }
+                clearActiveHoldState()
+                if active.isHold { stopHoldAction(active) } else { firePressAction(active) }
+            }
+            return
+        }
+
+        guard !isAnyRecordingActive else { return }
+        let mask = nsModifierMask(from: flags)
+        guard let action = matchingModifierOnlyAction(keyCode: keyCode, mask: mask) else { return }
+        activeModifierHoldAction = action
+        modifierHoldStartTime = Date()
+        if action.isHold, !startHoldAction(action, keyCode: keyCode) {
+            clearActiveHoldState()   // mic guard failed etc. — don't wait for a release
+        }
+        // Press actions bound to a bare modifier fire on release (handled above).
+    }
+
+    /// keyDown for a matched key-combo action: hold → start + own the key; press → fire.
+    private func dispatchKeyCombo(_ action: ShortcutAction, keyCode: Int) {
+        if action.isHold {
+            guard !isAnyRecordingActive else { return }   // already recording — swallow, don't stack
+            activeKeyHoldAction = action
+            activeKeyHoldKeyCode = keyCode
+            if !startHoldAction(action, keyCode: keyCode) { clearActiveKeyHoldState() }
+        } else {
+            // Press actions other than opening Preferences are skipped mid-recording.
+            guard !isAnyRecordingActive || action == .preferences else { return }
+            firePressAction(action)
+        }
+    }
+
+    @discardableResult
+    private func startHoldAction(_ action: ShortcutAction, keyCode: Int) -> Bool {
+        switch action {
+        case .dictation, .translate, .correction: return handleVoiceKeyDown()
+        case .selectionQA:                        return startSelectionQA()
+        case .manualPolish, .selectionTranslate, .preferences: return false
+        }
+    }
+
+    private func stopHoldAction(_ action: ShortcutAction) {
+        switch action {
+        case .dictation:   handleVoiceKeyUp()
+        case .translate:   handleVoiceKeyUp(translate: true)
+        case .correction:  handleVoiceKeyUp(correction: true)
+        case .selectionQA: finishSelectionQA()
+        case .manualPolish, .selectionTranslate, .preferences: break
+        }
+    }
+
+    private func firePressAction(_ action: ShortcutAction) {
+        switch action {
+        case .manualPolish:       triggerManualPolish()
+        case .selectionTranslate: triggerSelectionTranslate()
+        case .preferences:
+            DispatchQueue.main.async {
+                PreferencesWindowController.shared.showPreferences()
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        case .dictation, .translate, .correction, .selectionQA: break
+        }
+    }
+
+    /// Tear down an in-progress hold recording (mid-combo cancel). No-op for a
+    /// press action that was merely pending a modifier release.
+    private func cancelActiveRecording(for action: ShortcutAction) {
+        guard action.isHold else { return }
+        SystemAudioMute.shared.endMute()   // restore speaker on the combo-cancel path
+        if action == .selectionQA {
+            qaKeyRecording = false
+            qaSelectedText = nil
+        }
+        voiceService.cancelRecording()
+        voiceHUD.hide()
+    }
+
+    private func clearActiveHoldState() {
+        activeModifierHoldAction = nil
+        modifierHoldStartTime = nil
+    }
+
+    private func clearActiveKeyHoldState() {
+        activeKeyHoldAction = nil
+        activeKeyHoldKeyCode = nil
     }
 
     // MARK: - AXUIElement Helper
@@ -450,16 +437,12 @@ final class InputController: NSObject {
         }
     }
 
-    private func handleVoiceKeyDown(keyCode: Int) {
-        guard micReadyOrExplain() else {
-            // Call sites set their PTT flag before calling in — clear them so the
-            // matching keyUp is a no-op instead of a stop-with-no-recording error.
-            optionKeyRecording = false;    optionRecordingStartTime = nil
-            translateKeyRecording = false; translateRecordingStartTime = nil
-            correctionKeyRecording = false; correctionRecordingStartTime = nil
-            return
-        }
-        activeVoiceKeyCode = keyCode
+    /// Start a dictation/translate/correction recording. Returns false if the mic
+    /// guard blocks it, so the dispatch layer can clear the active-action state
+    /// (which it set before calling in) instead of leaving a phantom recording.
+    @discardableResult
+    private func handleVoiceKeyDown() -> Bool {
+        guard micReadyOrExplain() else { return false }
         peakRecordedLevel = 0
         recordingStartTime = Date()   // unified start for usage-stats duration
         recordingTargetElement = focusedElement()  // snapshot before HUD steals focus
@@ -480,10 +463,10 @@ final class InputController: NSObject {
         }
         voiceService.startRecording()
         voiceHUD.show(state: .recording, near: getCursorRect(), on: NSScreen.main)
+        return true
     }
 
     private func handleVoiceKeyUp(translate: Bool = false, correction: Bool = false) {
-        activeVoiceKeyCode = nil
         SystemAudioMute.shared.endMute()   // restore speaker as soon as recording stops
 
         // Capture recording duration now — the completion below is async and the
@@ -769,8 +752,7 @@ final class InputController: NSObject {
     /// True while any recording/PTT is in flight — select-and-act shortcuts must
     /// not interrupt an ongoing dictation/translation/correction/QA session.
     var isAnyRecordingActive: Bool {
-        optionKeyRecording || translateKeyRecording || correctionKeyRecording
-            || qaKeyRecording || activeVoiceKeyCode != nil
+        activeModifierHoldAction != nil || activeKeyHoldAction != nil || qaKeyRecording
     }
 
     /// Brief non-blocking HUD toast (e.g. "沒有選取文字"), auto-hidden after 1.2 s.

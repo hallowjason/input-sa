@@ -9,6 +9,11 @@ final class ShortcutRecorderView: NSView {
         var modifierFlags: UInt  // NSEvent.ModifierFlags.rawValue
 
         var displayString: String {
+            // A modifier-only chord (hold right-Option etc.) reads as just the
+            // side + symbol; the mask would otherwise duplicate the modifier.
+            if Self.modifierKeyCodes.contains(keyCode) {
+                return Self.modifierKeyCodeLabel(keyCode)
+            }
             var parts: [String] = []
             let flags = NSEvent.ModifierFlags(rawValue: modifierFlags)
             if flags.contains(.control)  { parts.append("⌃") }
@@ -17,6 +22,24 @@ final class ShortcutRecorderView: NSView {
             if flags.contains(.command)  { parts.append("⌘") }
             parts.append(Self.keyCodeLabel(keyCode))
             return parts.joined()
+        }
+
+        /// Side-aware label for a physical modifier key (used for modifier-only
+        /// chords). e.g. keyCode 61 → "右 ⌥".
+        static func modifierKeyCodeLabel(_ kc: UInt16) -> String {
+            switch kc {
+            case 54: return "右 ⌘"
+            case 55: return "左 ⌘"
+            case 56: return "左 ⇧"
+            case 57: return "⇪"
+            case 58: return "左 ⌥"
+            case 59: return "左 ⌃"
+            case 60: return "右 ⇧"
+            case 61: return "右 ⌥"
+            case 62: return "右 ⌃"
+            case 63: return "fn"
+            default: return "[\(kc)]"
+            }
         }
 
         /// Converts a HID keycode (Carbon/AppKit) to a display label.
@@ -58,12 +81,19 @@ final class ShortcutRecorderView: NSView {
     // MARK: - Shared capturing flag
     /// Set to true while recording so CGEventTap knows to pass all events through.
     static var isCapturing: Bool = false
+    /// The single recorder currently capturing (there are seven on the pane now).
+    /// Starting one stops any other so two never hold live monitors at once.
+    private static weak var capturingRecorder: ShortcutRecorderView?
 
     // MARK: - State
     private(set) var shortcut: Shortcut?
     private var isRecording = false
     private let label = NSTextField(labelWithString: "")
     private var monitor: Any?
+    // Modifier-only capture bookkeeping (a tap on a bare modifier = hold chord).
+    private var sawKeyDown = false
+    private var pendingModifierKeyCode: UInt16?
+    private var pendingModifierMask: UInt = 0
 
     var onChange: ((Shortcut?) -> Void)?
 
@@ -131,12 +161,26 @@ final class ShortcutRecorderView: NSView {
     }
 
     private func startRecording() {
+        // Only one recorder captures at a time — stop any sibling first so we never
+        // leave a second live monitor (or a stuck isCapturing) behind.
+        ShortcutRecorderView.capturingRecorder?.stopRecording()
+        ShortcutRecorderView.capturingRecorder = self
         isRecording = true
+        sawKeyDown = false
+        pendingModifierKeyCode = nil
+        pendingModifierMask = 0
         ShortcutRecorderView.isCapturing = true   // tell CGEventTap to step aside
         updateDisplay()
 
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        // Both keyDown (key + modifier combos) and flagsChanged (bare-modifier
+        // hold chords like right-Option) so every action is recordable.
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
             guard let self = self, self.isRecording else { return event }
+
+            if event.type == .flagsChanged {
+                self.handleFlagsChangedWhileRecording(event)
+                return nil
+            }
 
             // Esc cancels recording without saving
             if event.keyCode == 53 {
@@ -144,19 +188,43 @@ final class ShortcutRecorderView: NSView {
                 return nil
             }
 
-            // Any other key — modifier or not — becomes the shortcut. Previously this
-            // required at least one modifier (or a standalone function key) and silently
-            // discarded anything else, which left recording mode stuck forever with zero
-            // feedback on an unmodified keypress. Stuck recording mode is worse than a
-            // permissive shortcut: it leaves ShortcutRecorderView.isCapturing = true, which
-            // tells the global CGEventTap to pass every key through unmodified — disabling
-            // voice PTT and Ctrl+Option+P system-wide until the user finds Esc.
+            // Any other key — with or without modifiers — becomes a combo shortcut.
+            // Permissive on purpose: leaving recording mode stuck (isCapturing = true)
+            // would tell the global CGEventTap to pass every key through unmodified,
+            // disabling all shortcuts system-wide until the user finds Esc.
+            self.sawKeyDown = true
             let flags = event.modifierFlags.intersection([.control, .option, .shift, .command])
-            self.shortcut = Shortcut(keyCode: event.keyCode, modifierFlags: flags.rawValue)
-            self.onChange?(self.shortcut)
-            self.stopRecording()
+            self.commit(Shortcut(keyCode: event.keyCode, modifierFlags: flags.rawValue))
             return nil
         }
+    }
+
+    /// Track modifier presses so a *tap on a bare modifier* (press then release
+    /// with no other key in between) records as a modifier-only hold chord.
+    private func handleFlagsChangedWhileRecording(_ event: NSEvent) {
+        let mods = event.modifierFlags.intersection([.control, .option, .shift, .command])
+        let count = [NSEvent.ModifierFlags.control, .option, .shift, .command]
+            .filter { mods.contains($0) }.count
+        if count == 1 {
+            // Exactly one pure modifier held — remember this physical key as the
+            // candidate (side matters: right-Option ≠ left-Option).
+            pendingModifierKeyCode = event.keyCode
+            pendingModifierMask = mods.rawValue
+        } else if mods.isEmpty {
+            // Everything released. A single-modifier tap with no keyDown commits
+            // as a hold chord; a released half-built combo commits nothing.
+            if !sawKeyDown, let kc = pendingModifierKeyCode {
+                commit(Shortcut(keyCode: kc, modifierFlags: pendingModifierMask))
+            }
+            pendingModifierKeyCode = nil
+        }
+        // count >= 2: building a combo — wait for the keyDown (or a full release).
+    }
+
+    private func commit(_ sc: Shortcut) {
+        shortcut = sc
+        onChange?(sc)
+        stopRecording()
     }
 
     /// Safety net: if recording is somehow still active when this view is about to
@@ -170,6 +238,9 @@ final class ShortcutRecorderView: NSView {
     private func stopRecording() {
         isRecording = false
         ShortcutRecorderView.isCapturing = false   // restore tap
+        if ShortcutRecorderView.capturingRecorder === self {
+            ShortcutRecorderView.capturingRecorder = nil
+        }
         if let monitor = monitor {
             NSEvent.removeMonitor(monitor)
             self.monitor = nil

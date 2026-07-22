@@ -15,9 +15,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
 
     static let shared = PreferencesWindowController()
 
-    // MARK: - Shortcut Keys storage (voice only — polish is automatic after transcription)
-    private static let voiceShortcutKey = "com.inputsa.shortcut.voice"
-
     // MARK: - Dojo mode toggle storage (read by SherpaVoiceService per-transcription)
     private static let dojoModeKey = "com.inputsa.dojoMode"
 
@@ -34,20 +31,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
     static var muteWhileRecording: Bool {
         get { UserDefaults.standard.bool(forKey: muteWhileRecordingKey) }
         set { UserDefaults.standard.set(newValue, forKey: muteWhileRecordingKey) }
-    }
-
-    static var voiceShortcut: ShortcutRecorderView.Shortcut? {
-        get {
-            guard let data = UserDefaults.standard.data(forKey: voiceShortcutKey) else { return nil }
-            return try? JSONDecoder().decode(ShortcutRecorderView.Shortcut.self, from: data)
-        }
-        set {
-            if let sc = newValue, let data = try? JSONEncoder().encode(sc) {
-                UserDefaults.standard.set(data, forKey: voiceShortcutKey)
-            } else {
-                UserDefaults.standard.removeObject(forKey: voiceShortcutKey)
-            }
-        }
     }
 
     // MARK: - UI (internal: the tab-builder extension files read/write these)
@@ -69,8 +52,8 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
     var polishStatusCaption: NSTextField!
     var polishStatusDot: StatusDotView!
     var muteWhileRecordingSwitch: NSSwitch!
-    // Shortcuts pane
-    var voiceRecorder: ShortcutRecorderView!
+    // Shortcuts pane — one recorder per action (all seven are user-rebindable)
+    var shortcutRecorders: [ShortcutAction: ShortcutRecorderView] = [:]
     var translatePopUp: NSPopUpButton!
     var shortcutWarningLabel: NSTextField!
     // Custom-modes pane
@@ -236,7 +219,9 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
         updateServiceSectionVisibility()
         updateProviderStatus()
         updatePolishProviderStatus()
-        voiceRecorder?.setShortcut(PreferencesWindowController.voiceShortcut)
+        for (action, recorder) in shortcutRecorders {
+            recorder.setShortcut(ShortcutSettings.shared.shortcut(for: action))
+        }
         updateShortcutWarning()
         reloadPromptCards()
         dojoModeSwitch?.state = PreferencesWindowController.dojoMode ? .on : .off
@@ -255,7 +240,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
     }
 
     func windowWillClose(_ notification: Notification) {
-        voiceRecorder?.cancelRecordingIfActive()
+        shortcutRecorders.values.forEach { $0.cancelRecordingIfActive() }
         saveAPIKeys()             // safety net: a field still mid-edit hasn't fired end-editing yet
         saveCommunityNickname()   // same safety net for the nickname field
         if let service = voiceAddService {   // 🎙 voice-add still recording
@@ -270,6 +255,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
     /// CGEventTap stays bypassed (see cancelRecordingIfActive doc) with no way for the
     /// user to notice, since the window that would show "按下快捷鍵..." isn't even visible.
     func windowDidResignKey(_ notification: Notification) {
-        voiceRecorder?.cancelRecordingIfActive()
+        shortcutRecorders.values.forEach { $0.cancelRecordingIfActive() }
     }
 }
