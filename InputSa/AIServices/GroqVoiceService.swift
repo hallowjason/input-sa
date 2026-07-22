@@ -39,15 +39,25 @@ final class GroqVoiceService: NSObject, VoiceServiceProtocol {
         recordStartFailed = false
 
         let tmpURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("inputsa_voice_\(Int(Date().timeIntervalSince1970)).m4a")
+            .appendingPathComponent("inputsa_voice_\(Int(Date().timeIntervalSince1970)).wav")
         recordingURL = tmpURL
         recordingStartTime = Date()
 
+        // LINEAR16 WAV (uncompressed), NOT AAC/m4a. Rationale (2026-07-21):
+        // AAC encoding buffers the tail frames and flushes them asynchronously
+        // after stop(); reading the file immediately in stopAndTranscribe raced
+        // that flush and uploaded a truncated clip — the "只能轉錄前面 2 秒" bug
+        // friends hit but this machine (which defaults to the local Sherpa/PCM
+        // path) never saw. PCM WAV is finalized synchronously on stop(), so the
+        // whole utterance is always on disk before we read it. Groq Whisper
+        // accepts wav; 16 kHz mono 16-bit ≈ 32 KB/s, trivial to upload.
         let settings: [String: Any] = [
-            AVFormatIDKey:            Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey:          16000,
-            AVNumberOfChannelsKey:    1,
-            AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
+            AVFormatIDKey:             Int(kAudioFormatLinearPCM),
+            AVSampleRateKey:           16000.0,
+            AVNumberOfChannelsKey:     1,
+            AVLinearPCMBitDepthKey:    16,
+            AVLinearPCMIsFloatKey:     false,
+            AVLinearPCMIsBigEndianKey: false,
         ]
         do {
             audioRecorder = try AVAudioRecorder(url: tmpURL, settings: settings)
@@ -149,7 +159,7 @@ final class GroqVoiceService: NSObject, VoiceServiceProtocol {
         // prompt: 給 Whisper 一個真實的語境提示，大幅降低無聲/安靜時的幻覺輸出
         field("prompt",          "以下是繁體中文口語錄音，請精確轉錄說話者說的內容。")
 
-        body += "--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.m4a\"\r\nContent-Type: audio/m4a\r\n\r\n".utf8Data
+        body += "--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".utf8Data
         body += audioData
         body += "\r\n--\(boundary)--\r\n".utf8Data
         request.httpBody = body
