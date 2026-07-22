@@ -38,11 +38,16 @@ macOS 語音輸入法。按住右 Option 錄音，放開後自動轉成文字、
 ```bash
 git clone https://github.com/hallowjason/input-sa.git
 cd input-sa
+./tools/create-signing-cert.sh   # 只需跑一次：建立固定的簽章憑證
 ./install.sh
 ```
 
-會自動編譯、簽章（找不到開發憑證會自動退回 ad-hoc 簽章）、安裝到 `~/Applications/Input-sa.app` 並啟動。之後要更新，`git pull` 再跑一次 `./install.sh` 即可。
+`create-signing-cert.sh` 會建立一張**永久（約 10 年）的自簽程式簽章憑證**，之後 `./install.sh` 與 `./package-release.sh` 都會自動用它。用同一張固定憑證簽章，是讓「升級後麥克風授權不失效」成立的關鍵——ad-hoc 簽章每次重編都會變，授權就會對不上（詳見該腳本開頭註解）。第一次用它簽章時，系統可能跳「codesign 想使用鑰匙圈金鑰」，按【總是允許】一次即可。
+
+之後要更新，`git pull` 再跑一次 `./install.sh` 即可（憑證已在，不用再建）。發布給別人下載：`./package-release.sh` 產生 cloud-only zip，再 `gh release create`。
 
 ## 更新
 
 回到本頁面的 [Releases](../../releases) 看有沒有新版本，下載新的 zip 蓋掉舊的 `Input-sa.app` 即可，設定（API key、偏好）都存在系統層級，不會遺失。
+
+**從 v2.6.0 起，所有版本都用同一張固定憑證簽章**，所以升級新版後，麥克風、輔助使用等權限**不會失效、不用重新授權**。（唯一例外：你若是從 v2.6.0 之前的舊版升上來，這一次會需要重新允許一次麥克風——之後就永遠不用了。若升級後錄音沒反應，點選單列 🎙 →「系統診斷…」一鍵重置即可。）

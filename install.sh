@@ -23,10 +23,20 @@ printf 'APPLINSA' > "$BUILD_APP/Contents/PkgInfo"
 # 4. Sign (as current user — private key is in user keychain)
 # Inside-out: sign bundled sherpa dylibs FIRST, then the app. --deep alone can
 # miss/mis-order nested Mach-O signing, so the Frameworks dylibs are signed explicitly.
+#
+# Identity preference: the persistent "Input-sa Code Signing" cert first (same
+# fixed signature the release uses → mic/accessibility grants survive updates,
+# and local testing matches what friends get), then any Apple Development cert,
+# then ad-hoc. Run tools/create-signing-cert.sh once to create the persistent cert.
 echo "✍️  Signing..."
+SIGN_CERT_NAME="Input-sa Code Signing"
 DEV_CERT=$(security find-identity -v -p codesigning 2>/dev/null | grep "Apple Development" | head -1 | sed 's/.*"\(.*\)"/\1/')
 SIGN_ID="-"
-[ -n "$DEV_CERT" ] && SIGN_ID="$DEV_CERT"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_CERT_NAME"; then
+    SIGN_ID="$SIGN_CERT_NAME"
+elif [ -n "$DEV_CERT" ]; then
+    SIGN_ID="$DEV_CERT"
+fi
 echo "   Using identity: $SIGN_ID"
 
 # 4a. Sign each bundled dylib (no entitlements — libraries don't carry app entitlements)

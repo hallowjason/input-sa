@@ -25,6 +25,12 @@
 
 **發布**：`./package-release.sh` 產 `Input-sa-v2.6.0.zip`（17MB cloud-only）；三筆 commit（fix `8f5009d`／feat `f7544b1`／chore `be811c3`）＋本 docs；push main；`gh release create v2.6.0`。
 
+**治本簽章根治「每版重配麥克風」（使用者選免費自簽路線）**：問題本質＝macOS 把 TCC 麥克風授權綁在 app 的 **designated requirement（DR）**；ad-hoc 簽名的 DR＝`cdhash H"..."`（每次重編都變→他機升級後授權對不上、系統設定開關看似開啟實則失效）。**證據**：`codesign -d -r-` 比對——ad-hoc→cdhash；有憑證→`identifier "com.inputsa.inputmethod" and certificate leaf = H"e9aef…"`（**無 cdhash，跨版本恆定**）。
+- **解法**：新腳本 `tools/create-signing-cert.sh` 建一張**永久（10 年）自簽 code-signing 憑證**「Input-sa Code Signing」（openssl 走 config 檔給 codeSigning EKU，因 macOS 是 LibreSSL 不支援 `-addext`；import 帶 `-T /usr/bin/codesign` 免簽章時彈窗）。`install.sh`／`package-release.sh` 改成**優先用這張固定憑證**（缺才退 ad-hoc）。已實測：用它簽出的 app DR＝`certificate leaf = H"e9aefdd6…"`、`codesign -v` 通過。
+- **已重簽並替換線上 v2.6.0 資產**（`gh release upload v2.6.0 --clobber`，穩定簽章版）。從此**所有版本 DR 恆定→麥克風/輔助使用授權跨版本永久存活**。
+- **殘留（Apple 硬限制，免費無解）**：未公證＝每個人第一次裝仍要右鍵→打開一次（一輩子一次、非每版）；要連這步都免＝US$99/年 Apple 公證，使用者選了不付費。
+- **一次性過渡**：從舊 ad-hoc 版升到首個憑證版會再重配麥克風一次（DR 從 cdhash→cert），之後永久免。**開發機**（原本用 Apple Development 憑證）下次 `./install.sh` 也會換成這張自簽憑證→本機也會過渡重配一次。憑證私鑰在本機 login keychain，**換電腦要重跑 create-signing-cert.sh（會產生不同 cert→那台簽出的版本 DR 不同）**，故發布務必固定在同一台機器、或備份該憑證。
+
 ## ✅ 2026-07-19 完成（安裝環境自我診斷與自我修復，commit `e65ded5`，已 push）
 
 **觸發**：使用者朋友裝機後麥克風完全沒反應（快捷鍵能觸發 HUD，但聲波不動）。朋友自己的 Claude 誤判方向猜是「event tap 不穩定」——先讀程式碼確認 event tap 沒問題，真正根因是 **TCC × ad-hoc 簽名**：`install.sh` 找不到 Apple Development 憑證時退回 ad-hoc 簽名（`SIGN_ID="-"`），每次重新安裝簽章（cdhash）都會變，麥克風授權綁的是簽章不是 App 名字，於是**系統設定裡開關顯示已開啟，實際授權早就對不上目前的 binary**，`AVAudioRecorder` 靜默錄到空白，HUD 卻正常顯示錄音中。使用者接著要求「從根本面著手，讓程式具備自我排除問題的能力」，於是這輪不是單純修 bug，而是加整套診斷/修復機制。
