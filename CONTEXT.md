@@ -1,7 +1,57 @@
-# Session Context — 最後更新 2026-07-17
+# Session Context — 最後更新 2026-07-19
 
 ## 🔵 目前狀態（一句話）
-**本輪全部完結：兩輪新功能（第一輪=⌥P 選字潤飾接上＋劃詞問答 ⌃⌥Q＋劃詞翻譯 ⌃⌥T；第二輪=中英夾雜保留英文＋口頭修正整句詞條＋前文 buffer）過 verifier、**使用者實測回報「沒問題了」**、已 commit（`60c8720` 劃詞三功能／`3bb0f86` 語感強化／`a79b142` 版號）＋push＋發 Release `v2.5.0`。無進行中任務；下一棒等使用者提需求。HUD 串流預覽使用者明確說不做。**
+**v2.6.0 已發布：他機轉錄不穩兩根因修復（Groq 雲端錄音 AAC→WAV 根治「只錄 2 秒」＋錄音期間 App Nap 抑制）＋七個快捷鍵全部可自訂（資料驅動事件引擎、還原鍵、衝突警告、純修飾鍵長按錄製）。本機已裝 v2.6.0 實測、Release zip 已上架供朋友下載。事件狀態機無法離線自動測（需真實硬體按鍵），靠逐案 code trace ＋使用者實測驗收。**
+
+## ✅ 2026-07-22 完成（他機穩定性兩修 ＋ 七快捷鍵全可自訂，v2.6.0 已發布）
+
+**觸發**：朋友回報「光是最普通的轉錄不穩：只能轉錄前面約 2 秒、有時直接 [無內容]；只有我這台好、搬到別人機器就壞——是不是 GitHub 少了什麼」。另要求「快捷鍵應該要可以自訂」（截圖是快捷鍵總覽七個動作）。
+
+**穩定性診斷（兩個各自獨立的根因，疊加成「他機才壞」）**：
+1. **「只錄 2 秒」＝雲端錄音檔還沒寫完就被讀**。`GroqVoiceService` 原本錄 **AAC/m4a**，AAC 編碼在 `stop()` 後仍**非同步 flush 尾端音框**，`stopAndTranscribe` 立即 `Data(contentsOf:)` 會讀到**截斷檔**。時間差問題：本機寫得快剛好趕上，他機慢一點就被截。**為什麼本機測不到**：本機預設走**本地 Sherpa（LINEAR16 WAV）**，PCM 在 `stop()` 同步落盤沒有這問題；朋友預設走 Groq 雲端正好踩中唯一有這 bug 的路徑。**修法：Groq 改錄 LINEAR16 WAV**（與 Google/Sherpa 一致，副檔名/multipart 改 wav），根除整類 flush race。
+2. **「[無內容]」＝ ad-hoc 簽章 × TCC 麥克風授權對不上**（07-19 已修：自我診斷＋`tccutil reset`＋`record()` 失敗偵測），但**07-19 的修復從沒發成 Release**——朋友下載的 v2.5.0 zip 裡沒有。這次一併發版讓朋友拿得到。**本機開發者有 Apple Development 憑證（簽章穩定）→ 授權不失效**，這正是「只有你沒事」的簽章面成因（install.sh log 實證 `Apple Development: xzj071@…`）。
+3. **順手加背景防打盹**：`AudioLevelMeter.start/stop`（正好包住三 provider 整段錄音）持有 `ProcessInfo.beginActivity(.userInitiated)`，避免 LSUIElement 背景程式被 App Nap throttle 掉錄音 run loop（「錄到一半掉音」的可能一角，防禦性）。
+- 「GitHub 少了什麼」實情：檔案是齊的（本地模型是刻意排除的 243MB，預設雲端不需要）；真正「少的」是**沒發布的修復**＋這個雲端 bug。
+
+**七快捷鍵全可自訂（feat `f7544b1`）**：原本只有聽寫 PTT 可改、其餘六個硬編碼。改成**資料驅動**：
+- 新檔 `InputSa/Preferences/ShortcutSettings.swift`：`ShortcutAction` 註冊表（七動作 × 標題/說明/hold-or-press/預設綁定）＋每動作一組 UserDefaults（key 前綴 `com.inputsa.shortcut2.`，缺省即用預設；`set(nil)`＝還原該動作；`resetAll`；`conflictingAction` 撞鍵偵測；legacy `com.inputsa.shortcut.voice` → dictation **一次性遷移**）。`Shortcut.isModifierOnly`（keyCode∈54–63）。
+- `InputController.handle` 由硬編碼分支改 `cachedShortcuts` 驅動（見程式碼地圖）：**modifier-only chord 引擎**（flagsChanged，`handleModifierChordChange`，300ms debounce＋combo-cancel）＋**key-combo 分派**（keyDown，`matchingKeyComboAction`，**精確 modifier 比對**讓 ⌃⌥⇧Q 不誤觸 ⌃⌥Q、press 忽略 autorepeat、hold 開錄後全程獨佔該鍵防漏字）。七個預設綁定行為與改版前**逐案等價**（逐一 trace 過）。
+- `ShortcutRecorderView` 加 flagsChanged 監聽 → 可錄「純修飾鍵長按」（顯示「右 ⌥」等）；靜態 `capturingRecorder` 確保**同時只有一個 recorder 捕捉**（七個框，避免殘留 monitor / 卡住全域 tap）。
+- 快捷鍵分頁重寫：七個可錄製列 ＋「還原預設」＋撞鍵/裸鍵橘色警告。移除死碼（`optionKeyRecording`/`translateKeyRecording`/`correctionKeyRecording`/`activeVoiceKeyCode`/`cachedVoiceShortcut`/`matchesShortcut`/`PreferencesWindowController.voiceShortcut`/`kVKP/Q/T`）。
+
+**已知的小行為變更（可接受，已判斷非回歸）**：改版前只有 translate/correction 的 modifier-hold 會 combo-cancel、dictation（右⌥）不會；現在**所有** modifier-hold PTT 遇 keyDown 都 combo-cancel（防特殊字元洩漏，正常聽寫不按鍵故無影響）。
+
+**驗證**：`./build.sh` 乾淨（只有既有 NSUserNotification 棄用警告）；三套迴歸全過（dojo/數字/方向）；fresh verifier 因 watchdog stall 未跑完（只確認「乾淨編譯」），改由主 session **逐案 trace** 七個預設綁定＋所有 CONTEXT 記載的守衛（autorepeat/獨佔/combo-cancel/精確排除/mic-guard 清理/debounce）；`./install.sh` 裝 v2.6.0 於本機、程序起得來（PID、道場同步 31 條、無崩潰）。**事件攔截無法離線自動測，靠使用者實測收尾**。
+
+**發布**：`./package-release.sh` 產 `Input-sa-v2.6.0.zip`（17MB cloud-only）；三筆 commit（fix `8f5009d`／feat `f7544b1`／chore `be811c3`）＋本 docs；push main；`gh release create v2.6.0`。
+
+## ✅ 2026-07-19 完成（安裝環境自我診斷與自我修復，commit `e65ded5`，已 push）
+
+**觸發**：使用者朋友裝機後麥克風完全沒反應（快捷鍵能觸發 HUD，但聲波不動）。朋友自己的 Claude 誤判方向猜是「event tap 不穩定」——先讀程式碼確認 event tap 沒問題，真正根因是 **TCC × ad-hoc 簽名**：`install.sh` 找不到 Apple Development 憑證時退回 ad-hoc 簽名（`SIGN_ID="-"`），每次重新安裝簽章（cdhash）都會變，麥克風授權綁的是簽章不是 App 名字，於是**系統設定裡開關顯示已開啟，實際授權早就對不上目前的 binary**，`AVAudioRecorder` 靜默錄到空白，HUD 卻正常顯示錄音中。使用者接著要求「從根本面著手，讓程式具備自我排除問題的能力」，於是這輪不是單純修 bug，而是加整套診斷/修復機制。
+
+**新增 `InputSa/App/SelfDiagnostics.swift`**（單一入口，多處呼叫端共用）：
+- `runChecks()`：麥克風權限／輔助使用權限／音訊輸入裝置是否存在／（sherpa provider 時）本地模型檔是否完整，四項各回傳 pass/detail 白話說明
+- `resetMicPermissionAndReprompt()`：呼叫 `/usr/bin/tccutil reset Microphone <bundleID>` 清掉舊授權紀錄，再 `AVCaptureDevice.requestAccess` 觸發系統重新詢問，結果彈 alert 告知成功/失敗
+- `presentMicPermissionRecovery()`：麥克風異常時的標準對話框，「重置麥克風權限」一鍵按鈕
+- `presentReport()`：選單列「系統診斷...」的四項檢查報告，麥克風失敗時同樣附重置按鈕
+
+**`InputController.swift`**：
+- 新增 `micReadyOrExplain()` 守門，掛在**每一個**錄音入口最前面（右⌥/右⌘/右⇧ 三種 PTT、自訂快捷鍵、⌃⌥Q 劃詞問答）——未授權時不再顯示假的錄音 HUD，立刻跳修復對話框。守門失敗時**必須清掉呼叫端已設的 PTT flag**（optionKeyRecording/translateKeyRecording/correctionKeyRecording 及對應 StartTime），否則後續 keyUp 會找不到對應狀態
+- 新增 `peakRecordedLevel`（本次錄音音量峰值追蹤，key-down 時歸零、onLevelUpdate 裡取 max）：整段轉錄失敗時若峰值 <0.02，錯誤訊息會額外附「麥克風可能沒有真正收到音」的白話提示＋指向系統診斷，把原本模糊的「轉錄結果為空」變成可行動的線索
+
+**`SelectionActions.swift`**：劃詞問答（⌃⌥Q）錄音入口比照加 `micReadyOrExplain()` 守門與 `peakRecordedLevel` 追蹤
+
+**三個 VoiceService（Sherpa/Groq/Google）**：新增 `recordStartFailed` flag——`AVAudioRecorder.record()` 回傳 false（硬體開不起來）或 init 拋錯時設 true，`stopAndTranscribe` 改回報明確的「錄音無法啟動——請檢查系統設定 › 聲音 › 輸入」並清暫存檔（原本這種情況只寫 log,使用者只會看到跟靜音一樣的空白轉錄）。`SherpaVoiceService` 另加 `static var modelInstalled`（檢查 `model.int8.onnx`/`tokens.txt` 是否存在），供啟動檢查與診斷報告共用
+
+**`AppDelegate.swift`**：啟動時若 provider=sherpa 且本地模型缺失，直接跳「安裝不完整」alert（不必等使用者按下快捷鍵才發現）；選單列新增「系統診斷...」項目；麥克風 denied/請求被拒都改走 `SelfDiagnostics.presentMicPermissionRecovery()`（移除舊的 `showMicrophonePermissionAlert`）
+
+**`install.sh`**：偵測到 `SIGN_ID="-"`（ad-hoc fallback，朋友那類機器的常態）時，**自動**印出說明並執行 `tccutil reset Microphone com.inputsa.inputmethod`——不用使用者記得帶 `--reset-mic`；原本簽名穩定（有開發憑證）時的 opt-in `--reset-mic` 路徑不變
+
+**驗證**：`./build.sh` 乾淨編譯（只有既有的 `NSUserNotification` 棄用警告,與本次改動無關）；`bash -n install.sh` 語法過；**獨立 fresh-context verifier 全項 CONFIRMED**——逐一追過每個錄音入口的 PTT flag 狀態機（守門失敗時 keyUp 是否確實變 no-op）、`nm`/`grep` 確認新符號（`micReadyOrExplain`／`SelfDiagnostics.presentReport`／`SherpaVoiceService.modelInstalled`）與新增中文字串（系統診斷／錄音無法啟動／安裝不完整 等）真的編進二進位檔、無新增警告、无 scope creep（改動僅限聲稱的 9 個檔案）
+
+**已 commit＋push**：`e65ded5`（9 files, +311/-31），GitHub `hallowjason/input-sa` main 最新 commit。**尚未發新 GitHub Release**——`design-refs/` 仍是既往未追蹤目錄，不影響此次 commit
+
+**回寫全域記憶**：`reference_auth_playbook.md` 新增一列「macOS TCC × ad-hoc 簽名」，記錄「授權綁 signature、ad-hoc 每次重簽都變、tccutil reset 是解法」這條跨專案可重用的知識（下次任何自簽 macOS App 遇到權限詭異都能先查這條，不必重新一輪除錯）
 
 ## ✅ 2026-07-17 完成（劃詞三功能＋語感三修,兩輪皆過 fresh verifier）
 
@@ -187,10 +237,15 @@ macOS 語音輸入法（仿 Windows SpeakSlow 聲聲慢）。Swift CGEventTap �
 - **⌃⌥T 按一下**：劃詞翻譯——選取文字 → 浮窗顯示譯文（中文→目標語可切英/泰；外文→自動繁中），不注入游標
 - 上述三者的選取讀取皆走 `SelectionReader`：AX 優先，讀不到自動合成 ⌘C 備援（Electron/終端機可用）
 
-## 程式碼地圖（【2026-07-17】= 本輪劃詞/語感輪異動）
+## 程式碼地圖（【2026-07-19】= 本輪自我診斷異動，【2026-07-17】= 上輪劃詞/語感輪異動）
 ```
-InputSa/App/AppDelegate.swift               ← 選單列 + 啟動
+InputSa/App/SelfDiagnostics.swift           ← 【2026-07-19 新檔】四項檢查（麥克風/輔助使用/輸入裝置/本地模型）
+                                              ＋tccutil 一鍵重置＋選單列「系統診斷...」報告
+InputSa/App/AppDelegate.swift               ← 選單列 + 啟動【2026-07-19】啟動時查模型完整性；
+                                              denied 麥克風改走 SelfDiagnostics.presentMicPermissionRecovery()
 InputSa/InputMethod/InputController.swift   ← CGEventTap、右⌥/右⌘ PTT、runAIPolish、inputSaLog 全域 logger
+                                              【2026-07-19】micReadyOrExplain() 守門掛所有錄音入口；
+                                              peakRecordedLevel 峰值追蹤（近零時錯誤訊息附診斷提示）
                                               【2026-07-17】handle() 六個新分支（AnswerPanel ⎋／polishPreview ↩⇥⎋／
                                               QA Q 鍵獨佔／⌥P／⌃⌥Q／⌃⌥T）；triggerManualPolish 升級；
                                               recentUtterances 前文 buffer（cap2/TTL3分/僅記憶體）
@@ -203,8 +258,11 @@ InputSa/UI/AnswerPanelController.swift      ← 【2026-07-17 新檔】單例答
                                               可捲動 NSTextView、複製鈕、英泰切換、⎋ 走 event tap 關閉）
 InputSa/AIServices/SherpaVoiceService.swift ← 本地 STT（decode→opencc→dojo correct→log 三階段）
                                               【本輪】加 AudioLevelMeter 量測
+                                              【2026-07-19】recordStartFailed flag＋static modelInstalled
 InputSa/AIServices/GroqVoiceService.swift   ← 雲端 STT（Whisper）【2026-07-17】language "zh" 維持不動（加註解說明）
+                                              【2026-07-19】recordStartFailed flag（record() 失敗→明確錯誤）
 InputSa/AIServices/GoogleVoiceService.swift ← 雲端 STT（含台語）【2026-07-17】alternativeLanguageCodes 加 en-US
+                                              【2026-07-19】recordStartFailed flag（同上）
 InputSa/AIServices/AudioLevelMeter.swift    ← 【新檔】共用音量量測元件
 InputSa/AIServices/GeminiPolishService.swift← 模型 fallback 鏈，SSE 串流【2026-07-17】enhance 加 priorContext 參數
 InputSa/AIServices/TranscriptionMode.swift  ← 潤飾/翻譯 prompt + dojoVocabularySection
@@ -230,19 +288,23 @@ InputSa/Preferences/PreferencesSidebar.swift ← 【v3 新檔】System Settings 
 InputSa/Preferences/PreferencesWindowController.swift ← 【v3 重寫】780×560 側欄版面、四 pane 顯隱切換（showPane 單一真相）
 InputSa/Preferences/Preferences…Tab.swift ×4 ← 【v3 重寫】分組白卡列版面；控制樹/action/資料流不變
 build.sh / install.sh                        ← 裸編譯打包本機安裝（開發者用）
+                                              【2026-07-19】build.sh 加 SelfDiagnostics.swift 進 SOURCES；
+                                              install.sh 偵測 ad-hoc fallback（SIGN_ID="-"）自動 tccutil reset
 package-release.sh                           ← GitHub Release 打包（雲端優先、強制 ad-hoc 簽章）；讀 Info.plist 版號命名 zip
 InputSa/Resources/Info.plist                 ← 版本號現為 2.5.0 (build 7)，改版號在這裡
 README.md / .gitignore                       ← 面向 GitHub 公開 repo
 ```
 
 ## 目前發布狀態
-- **GitHub repo**：https://github.com/hallowjason/input-sa（public，main branch，最新 commit `a79b142`，**已 push**）
-- **GitHub Release**：`v2.5.0`（2026-07-17 發布）https://github.com/hallowjason/input-sa/releases/tag/v2.5.0 — 雲端優先版 zip，內含劃詞三功能＋語感強化
+- **GitHub repo**：https://github.com/hallowjason/input-sa（public，main branch，最新 commit `e65ded5`，**已 push**）
+- **GitHub Release**：`v2.6.0`（2026-07-22 發布）— 雲端優先版 zip（`Input-sa-v2.6.0.zip`，17MB，含 Groq 錄音 WAV 修復＋App Nap 抑制＋07-19 麥克風自我診斷＋七快捷鍵自訂）。**這是朋友要下載的版本**，補齊了 v2.5.0 到現在所有他機穩定性修復。（歷史：v2.5.0 = 07-17 劃詞三功能＋語感強化，不含 07-19/07-22 修復）
 - **本機**：`~/Applications/Input-sa.app` 是 `./install.sh` 裝的含本地模型版，程式碼＝v2.5.0（使用者實測過的就是它）；`build/` 目錄是 package-release 跑完的雲端版（無本地模型）。polishProvider 跟著使用者上次在偏好設定的選擇——**注意前文 buffer 只在 Gemini 生效，若使用者選 Apple 本地則該功能靜默不作用**
 - **這台機器沒有全域 git 身分**（`~/.gitconfig` 不存在）：本次 commit 前曾跳 `Author identity unknown`，用 `git config --local` 比照本 repo 既有 commit 作者（`維宸 <gooo@weichendeMacBook-Pro.local>`）補上，已寫入全域 `~/.claude/reference/lessons.md`——下次任何全新 repo 第一次 commit 都可能重踩，直接查歷史作者複用即可
 - 下次改完程式碼要發新 Release：改版號（`InputSa/Resources/Info.plist` 的 `CFBundleShortVersionString`/`CFBundleVersion`）→ `./package-release.sh` → commit 版號 → push → `gh release create vX.Y.Z ...`
 
 ## 待辦 / 未決事項
+- **【最新，2026-07-19】要不要現在發新版？** 自我診斷改動已 commit＋push，但版號還是 2.5.0 (build 7)、Release 頁面還是舊 zip。若朋友是走 Release 頁面裝的（非開發者 git clone 流程），現在**拿不到**這次的修復。下一棒開口先問使用者：現在就 bump 版號發 v2.6.0，還是等累積更多改動再一起發？
+- **【觀察中，2026-07-19】自我診斷實戰效果未驗**：這輪的 fresh verifier 是靜態追蹤程式碼邏輯＋編譯驗證＋symbol 存在性檢查，**沒有實機重現朋友那台機器的 ad-hoc TCC 失效場景**去按「重置麥克風權限」看是否真的修好——若使用者朋友之後回報「修了/還是不行」，這是第一手真實回饋，比這輪的驗證更有說服力
 - ~~實測兩輪新功能~~ ✅ 使用者回報「沒問題了」（2026-07-17）
 - ~~分兩筆 commit＋發版~~ ✅ 已完成（`60c8720`／`3bb0f86`／`a79b142`，Release v2.5.0）
 - ~~HUD 串流預覽升級~~ 使用者明確說不做（2026-07-17）
@@ -260,6 +322,9 @@ README.md / .gitignore                       ← 面向 GitHub 公開 repo
 - [ ] `assets_dl/` 暫存需使用者手動清（Claude rm 被權限擋）
 
 ## 踩雷點（動手前必看，本輪新增在最上面）
+- **【2026-07-19】macOS TCC 授權綁的是 code signature，不是 App 名字/bundle ID 本身**：ad-hoc 簽名（找不到開發憑證時的 fallback）每次重新安裝 cdhash 都會變，麥克風等權限的舊授權紀錄會**悄悄對不上目前的 binary**——症狀是系統設定裡開關顯示已開啟（那是舊紀錄的殘影），但實際錄音靜默拿不到音，HUD 卻正常顯示錄音中，使用者/AI 很容易誤判成程式邏輯 bug（event tap 不穩、UI 沒串好）而不是權限問題。**解法**：`tccutil reset Microphone <bundleID>` 清掉舊紀錄讓系統重新詢問；App 內建的偵測不能只查 `authorizationStatus`（那個值本身沒問題，問題在於它反映的是「錯的」舊紀錄）,要在**實際使用當下**（key-down 那一刻）做守門,並在轉錄結果異常時用峰值音量（`peakRecordedLevel` 全程近零）反推「根本沒收到音」。**任何自簽名 macOS App 發佈給不同機器的使用者，都該假設對方大機率是 ad-hoc 簽名，權限問題要往這個方向先查**，已回寫全域記憶 `reference_auth_playbook.md`
+- **【2026-07-19】PTT 類錄音入口加任何 key-down 前置守門（如本輪的 `micReadyOrExplain()`），一定要處理「呼叫端已經先設好 PTT flag」的情況**：本專案的三種修飾鍵 PTT（右⌥/右⌘/右⇧）都是呼叫端先設 `xxxKeyRecording = true` 才呼叫 `handleVoiceKeyDown()`，若守門在此時失敗但沒把這些 flag 清掉，對應的 keyUp 分支會誤以為「正在錄音」而執行一次沒有 startRecording 過的 stopAndTranscribe，狀態機會卡住。自訂快捷鍵路徑因為沒有前置 flag（直接靠 `activeVoiceKeyCode` 是否被設定判斷），守門失敗時 return 提早、`activeVoiceKeyCode` 沒被賦值，keyUp 分支的 `let active = activeVoiceKeyCode` 會 binding 失敗而自然 no-op——**這條路徑不用清 flag,但要留意「靠 optional binding 天然擋掉」跟「靠顯式清 flag 擋掉」是兩種不同機制,新增守門時要對每個入口分別確認**
+- **【2026-07-19】`AVAudioRecorder.record()` 回傳 `Bool`,原本三個 provider 都沒檢查回傳值**——硬體開不起來（無可用輸入裝置/HAL 失敗）時 `record()` 回 false 但不拋錯,舊程式碼會誤以為錄音正常開始,直到轉錄完才得到一個跟「使用者真的沒說話」無法區分的空白結果。任何新增的 `AVAudioRecorder` 呼叫都要檢查 `record()` 回傳值,false 時視同啟動失敗處理（清 URL、標記狀態、提前回報)，不要只靠 `try`/`catch` 那層
 - **【2026-07-17】接死碼功能「入口＋出口」都要接**：⌥P 這輪 executor 接了觸發分支,但預覽的 ↩/⎋ 攔截（handlePolishPreviewKey）仍不可達——nonactivating panel 收不到鍵盤,所有互動鍵都得在 event tap handle() 攔。任何新浮窗互動都要在 handle() 有對應分支＋verifier 查「新增函式的呼叫可達性」
 - **【2026-07-17】要按功能拆 commit,就必須「每輪做完先 commit 再開下一輪」**：本輪連做兩輪（劃詞／語感）才一起收尾,結果兩輪在 `InputController.swift`（前文 buffer 緊貼 QA 屬性）與 `TranscriptionMode.swift`（英文規則改到第一輪剛加的 .selectionTranslate case）**同一 hunk 內逐行交錯**,拆不開。`git add -p` 在本 harness 是互動指令**不可用**,只剩 hand-authored patch 做 sub-hunk surgery（高風險,未做）。最終只能檔案級拆分＋在 commit message 誠實標註內容外溢。**下次多輪連做前先問：這些輪次要不要分開 commit？要就先 commit 再開下一輪**
 - **【2026-07-17】新增 event tap 分支的三個必備守衛**：①`!isAnyRecordingActive`（別劫持進行中的 PTT）②`keyboardEventAutorepeat == 0`（長按不重複觸發）③修飾鍵要**明確排除**不要的（`!flags.contains(.maskShift)` 等,否則 ⌃⌥⇧Q 也會誤觸）。另:PTT 類的 keyUp **只認 keyCode 不認 flags**（使用者常先放開修飾鍵）,且錄音中要「全程獨佔該鍵」吞掉 autorepeat 與終端 keyUp,否則會漏字元進文件（QA 的 q）
@@ -306,11 +371,11 @@ README.md / .gitignore                       ← 面向 GitHub 公開 repo
 ```bash
 cd /Users/gooo/Desktop/.claude/projects/input-sa
 # 對 Claude 說：「讀 CONTEXT.md，繼續 input-sa」
-# 現況：本輪全部完結——兩輪新功能（劃詞三功能＋語感三修）過 verifier、使用者實測「沒問題了」、
-#       已 commit（60c8720／3bb0f86／a79b142）＋push＋發 Release v2.5.0。版號 2.5.0 (build 7)。
+# 現況：安裝環境自我診斷/自我修復功能完成，過 fresh verifier CONFIRMED，已 commit `e65ded5` 並 push 到
+#       GitHub main。版號仍是 2.5.0 (build 7)，**尚未發新 Release**——Release 頁面的 zip 還是舊版。
 #       工作樹乾淨,只剩未追蹤 design-refs/（留參考,不 commit）
-# 第一件事：**沒有進行中的任務**——等使用者提新需求。若他回報本輪功能的使用問題,先看「待辦/未決事項」的
-#          觀察項（Apple 指紋清單／Groq zh／前文只在 Gemini／⌥P 吃掉 Option+P 打 π）
+# 第一件事：先問使用者「要不要現在發新版（2.6.0）」——朋友若是走 Release 頁面裝的，現在還拿不到這次修復。
+#          若朋友已回報「重裝後修好了/還是不行」，那是這次自我診斷機制的第一手實戰回饋，優先處理。
 # 下次發版流程：改 Info.plist（CFBundleShortVersionString + CFBundleVersion）→ ./package-release.sh
 #          → commit 版號 → push → gh release create vX.Y.Z <zip> --title --notes
 # 迴歸測試（四套）：swiftc tests/main.swift InputSa/AIServices/DojoCorrectionTable.swift -o /tmp/dojo_tests && /tmp/dojo_tests
@@ -318,4 +383,5 @@ cd /Users/gooo/Desktop/.claude/projects/input-sa
 #          swiftc tests/SelectionTranslateTests.swift InputSa/AIServices/SelectionTranslateDirection.swift -o /tmp/st_tests && /tmp/st_tests
 # 環境：provider=sherpa（本地 STT）、polishProvider=apple（注意:前文 buffer 只在 Gemini 潤飾生效）、dojoMode=true；GEMINI_API_KEY 在 ~/.claude/.env
 # 驗證離線 UI 用「離線截圖驗收法」（全域記憶 reference_appkit_ui_testing.md,在 ~/.claude/projects/-Users-gooo-Desktop--claude/memory/）
+# 新診斷機制自查：選單列 🎙 →「系統診斷...」；麥克風異常修復走 tccutil reset（見 SelfDiagnostics.swift）
 ```
