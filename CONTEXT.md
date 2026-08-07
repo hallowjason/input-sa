@@ -1,7 +1,8 @@
 # Session Context — 最後更新 2026-08-07
 
 ## 🔵 目前狀態（一句話）
-**v2.6.1 已發布：修掉「全新安裝直接崩潰」（library validation 擋自簽 app 載入自帶 dylib，加 `disable-library-validation` entitlement 根治）＋三個鍵盤路徑的真 bug（tap callback 阻塞、快點 PTT 造成熱麥克風＋幻影注入、無聲錄音仍注入）＋一支按鍵歸屬追查器。使用者原始回報「會自動打出一整串 h、而且 input-sa 結束不了」尚未結案——最可能是 tap 阻塞（已修），但沒有直接證據，等下次發作看 `~/Library/Logs/InputSa.log`。**
+**v2.6.1 已發布上線**（[release](https://github.com/hallowjason/input-sa/releases/tag/v2.6.1)，HEAD `b5e5fb5`，工作樹乾淨）：修掉「全新安裝直接崩潰」（library validation 擋自簽 app 載入自帶 dylib，加 `disable-library-validation` entitlement 根治）＋三個鍵盤路徑的真 bug（tap callback 阻塞、快點 PTT 造成熱麥克風＋幻影注入、無聲錄音仍注入）＋一支按鍵歸屬追查器。本機已裝 v2.6.1（含本地模型，tap 實測活著）。v2.6.0 已加失效警語、**使用者決定不 clobber 其資產**。
+**★ 唯一未結案**：使用者原始回報「會自動打出一整串 h、而且 input-sa 結束不了」——tap 阻塞的機制對得上兩個症狀且已修，但**沒有直接證據**。下次發作先 `grep -E "synthetic keyDown|runaway key repeat" ~/Library/Logs/InputSa.log`。詳見文末「下次繼續」。
 
 <details><summary>（上一輪）v2.6.0 狀態</summary>
 
@@ -432,11 +433,30 @@ README.md / .gitignore                       ← 面向 GitHub 公開 repo（REA
 ```bash
 cd /Users/gooo/Desktop/.claude/projects/input-sa
 # 對 Claude 說：「讀 CONTEXT.md，繼續 input-sa」
-# 現況（2026-07-22）：v2.6.0 已發布並用固定自簽憑證重簽（線上資產已 clobber）。HEAD=e38046a，工作樹乾淨
-#   （只剩未追蹤 design-refs/ 留參考不 commit）。本輪三件事全上線：Groq 錄音 WAV＋App Nap／七快捷鍵自訂／簽章治本。
-# 無待辦阻塞。開放項：①使用者實測快捷鍵行為回饋（事件攔截只能實機測）②是否要備份簽章憑證（已提議，待使用者點頭）
+#
+# 現況（2026-08-07）：v2.6.1 已發布 https://github.com/hallowjason/input-sa/releases/tag/v2.6.1
+#   HEAD=b5e5fb5，工作樹乾淨（只剩未追蹤 design-refs/ 留參考不 commit）。本機已裝 v2.6.1
+#   含本地模型、tap 實測活著。v2.6.0 的 release notes 已加「此版已失效，請下載 v2.6.1」警語。
+#   ⚠️ 使用者已明確表示 **v2.6.0 的 zip 不要 clobber**（「暫時不用有人使用」）——不要自作主張去換。
+#
+# ★ 唯一未決：「自動打出一整串 h」到底是誰打的，沒有直接證據，尚未結案。
+#   已修的 tap callback 阻塞機制能同時解釋「一整串停不下來」＋「input-sa 結束不了」兩個症狀，
+#   但那是推論。使用者回報 input-sa 失能那半小時安靜（弱旁證）。
+#   → 下次發作第一件事：
+#        grep -E "synthetic keyDown|runaway key repeat" ~/Library/Logs/InputSa.log
+#      有記錄＝寫出打字的 pid（硬體來源標 hardware）；完全沒記錄也是資訊——代表是離散 keyDown/keyUp
+#      連發，兩支探針都抓不到，方向轉去查鍵盤硬體 / McBopomofo / /Library/Input Methods/GOING13.app。
+#   → 若確認仍是 input-sa，下一個要動的是 .selectionQA（⌃⌥Q）——它是唯一還同步跑在 tap callback
+#      裡的選取讀取（見 2026-08-07 段落「殘留」）。
+#
+# 其他開放項：①使用者實測快捷鍵行為回饋（事件攔截只能實機測）②是否要備份簽章憑證（已提議，待點頭）
 #   ——若使用者要備份：鑰匙圈存取→找「Input-sa Code Signing」→右鍵匯出 .p12（含私鑰）存到安全處。
 #   ——若朋友回報快捷鍵/轉錄仍有問題，那是第一手實戰回饋，優先處理。
+#
+# ⚠️ 動 entitlements 前必讀：改 entitlements＝改簽章＝輔助使用授權當場失效，且失敗無聲
+#   （app 照常啟動、圖示在，但快捷鍵全死）。先告知使用者要重給權限，事後用
+#   `tccutil reset Accessibility com.inputsa.inputmethod` 清舊紀錄再重啟 app。
+#   判斷 tap 有沒有掛上：CGGetEventTapList（範例見 2026-08-07 段落）。
 # 發版流程（憑證已建，直接用）：改 Info.plist 版號 → ./package-release.sh（自動用固定憑證簽）
 #   → commit → push → gh release create vX.Y.Z <zip> --title --notes（或改資產用 gh release upload --clobber）
 # 三套迴歸：swiftc tests/main.swift InputSa/AIServices/DojoCorrectionTable.swift -o /tmp/dojo_tests && /tmp/dojo_tests
