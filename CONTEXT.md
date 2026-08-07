@@ -1,7 +1,43 @@
-# Session Context — 最後更新 2026-07-19
+# Session Context — 最後更新 2026-08-07
 
 ## 🔵 目前狀態（一句話）
+**v2.6.1 已發布：修掉「全新安裝直接崩潰」（library validation 擋自簽 app 載入自帶 dylib，加 `disable-library-validation` entitlement 根治）＋三個鍵盤路徑的真 bug（tap callback 阻塞、快點 PTT 造成熱麥克風＋幻影注入、無聲錄音仍注入）＋一支按鍵歸屬追查器。使用者原始回報「會自動打出一整串 h、而且 input-sa 結束不了」尚未結案——最可能是 tap 阻塞（已修），但沒有直接證據，等下次發作看 `~/Library/Logs/InputSa.log`。**
+
+<details><summary>（上一輪）v2.6.0 狀態</summary>
+
 **v2.6.0 已發布並已用「固定自簽憑證」重簽（根治他機每版重配麥克風）。本輪三件事全部完成上線：①他機轉錄不穩兩修（Groq AAC→WAV 治「只錄 2 秒」＋App Nap 抑制）②七快捷鍵全可自訂（資料驅動引擎＋還原鍵＋衝突警告＋純修飾鍵長按錄製）③簽章治本（`tools/create-signing-cert.sh` 建永久憑證，install/package 腳本改用它，DR 已實測恆定為 `certificate leaf`）。線上 v2.6.0 資產已 clobber 成穩定簽章版。全部 commit＋push（HEAD `e38046a`）。無待辦阻塞；唯一開放項＝使用者實測快捷鍵行為回饋、以及是否要備份簽章憑證（我已主動提議）。**
+
+</details>
+
+## ✅ 2026-08-07 完成（鍵盤異常三修 ＋ 崩潰根治，v2.6.1 已發布）
+
+**觸發**：使用者回報「input-sa 會自動在鍵盤上打 h」，追問後補充兩個關鍵細節——**「一次一整串完全停不下來」**、**「h 停不下來，input-sa 也結束不了」**，且 input-sa 失能那半小時內沒發作。
+
+**先確認的事**：全專案只合成兩種按鍵事件——⌘C（`0x08`，`SelectionReader.postCmdC`）與 ⌘V（`0x09`，`pasteViaCmdV`）。沒有 unicode 注入、沒有 AX 插字、沒有 `h` 的 keyEquivalent。**沒有任何路徑會送出 `h`**，所以不要再去找「誰在打 h」的發射點，要找的是**讓系統以為某個鍵卡住**的機制。
+
+**① 根因（最符合兩個症狀）：`SelectionReader.read()` 同步跑在 event tap callback 裡。**
+它做兩件會阻塞的事：AX 查詢（`AXUIElementCopyAttributeValue`，預設 messaging timeout **6 秒**，對象 app 沒回應就等好等滿）＋合成 ⌘C 後 `usleep` 輪詢剪貼簿最多 350ms。`.cgSessionEventTap` + `.defaultTap` 的 callback 沒返回前，**window server 會把全機器的按鍵壓住**；同時主執行緒被佔住 → 選單列 🎙 點不開 → **「結束不了」**。macOS 逾時把 tap 停用後，積壓的按鍵（含 window server 期間持續產生的 autorepeat）**一次沖出** → **「一整串停不下來」**。兩個症狀同一個根。
+- 修法 A：`readViaAX()` 加 `AXUIElementSetMessagingTimeout(sys, 0.25)`，把最壞情況從 6s 壓到 250ms。
+- 修法 B：`firePressAction` 的 `.manualPolish`／`.selectionTranslate` 改 `DispatchQueue.main.async`——callback 先返回，工作留到下一個 main loop turn（同一條執行緒，差幾微秒，但鍵盤不再等它）。
+- **殘留**：`.selectionQA`（⌃⌥Q）是 hold action，`startHoldAction` 要回傳 Bool 決定是否保留 hold 狀態，沒改成 async；它現在被修法 A 綁到約 0.6s 上限。要根治得把 `clearActiveKeyHoldState` 改成 internal 並讓 `startSelectionQA` 自己清狀態，**注意 keyUp 可能比 async 的 start 先到**。
+
+**② 快點一下 PTT 會留下熱麥克風＋幻影注入**（`handleModifierChordChange` 的 300ms debounce）。debounce 本來是為了吸收 macOS 偶發的假 flagsChanged，但**真的輕點一下**在那個瞬間長得一模一樣，release 被 `return` 吞掉後 `activeModifierHoldAction` **永遠不清**：麥克風一直錄、HUD 掛著，直到下一次修飾鍵事件（按 ⇧ 打大寫、⌘⇥…）才判定放開 → 把那段環境音**轉錄、潤飾、貼到游標處**。
+- 修法：新增 `verifyDebouncedRelease`，150ms 後用 `NSEvent.modifierFlags` 複查實體狀態——還按著＝假事件（繼續錄）；已放開＝真輕點（`cancelActiveRecording` 丟棄）。`modifierDebounceToken` 在 `clearActiveHoldState` 與新 hold 開始時都 +1，防止過期的複查誤殺新 session。
+
+**③ 無聲錄音仍會注入幻覺**：`handleVoiceKeyUp` 的 success 分支沒有任何空值守衛，STT 對靜音常回短幻覺（單字母、「嗯」、「謝謝觀看」）照樣一路貼出去。加守衛：`transcript` trim 後為空、或 `peakRecordedLevel < 0.02`（≈ −49 dBFS，與 failure 分支同閾值）→ 不注入，只 `flashHUDMessage("沒有收到聲音")`。
+
+**④ 按鍵歸屬追查器**（`recordKeystrokeForAttribution`）：tap 本來就看得到每個 keyDown，順手記兩種異常到 `~/Library/Logs/InputSa.log`——(a) `eventSourceUnixProcessID != 0` 的合成按鍵（硬體來源是 0），直接寫出是哪個 pid 打的；(b) 同一鍵連續 autorepeat 破 100 次，記一筆 runaway。檔案 I/O 用 `DispatchQueue.main.async` 推離 tap callback（在裡面寫檔會害 tap 逾時，正是①的教訓）。**已實測**：`synthetic keyDown: keyCode=105 … posted by pid 10594`。
+- **偵測盲區**：只吃 autorepeat 旗標。壞掉的硬體若送出離散的 keyDown/keyUp 連發，兩支探針都抓不到。
+
+**⑤ 崩潰根治（本次發版的主因）：自簽 app 在此機已無法載入自帶 dylib。**
+`build.sh`＋`install.sh` 後 app 啟動即 SIGABRT，dyld：`Library not loaded: @rpath/libsherpa-onnx-c-api.dylib … mapping process and mapped file (non-platform) have different Team IDs`。**關鍵證據：把 7/22 的 `Input-sa-v2.6.0.zip` 原封不動解壓出來跑，一模一樣崩潰**——所以不是這輪改動造成的，是環境變了（Hardened Runtime 的 library validation 要求 dylib 與主程式同一個 Team ID，自簽憑證根本沒有 Team ID）。舊安裝還活著是因為它早就被系統放行過，一旦 bundle 被換掉就中。
+- 修法：`InputSa.entitlements` 加 `com.apple.security.cs.disable-library-validation`。這是非公證 app 自帶函式庫的官方逃生口；dylib 本來就在簽好的 bundle 內、每次 build 都跟著重簽，範圍夠窄。
+- **代價（踩過一次）**：改 entitlements 會改簽章 → **輔助使用授權當場失效**（app 還會啟動，但 CGEventTap 掛不上，等於整個功能死掉且沒有明顯錯誤）。用 `CGGetEventTapList` 列出所有 tap、確認 app 的 pid 不在裡面才發現。修復＝`tccutil reset Accessibility com.inputsa.inputmethod` 清掉過期紀錄，重啟 app 讓它重新請求，使用者到系統設定勾一次。**下次再動 entitlements 一定要預先告知使用者要重給權限。**
+- **診斷小抄**：app 的 `NSLog`／`[InputSa]` 訊息在這台機器的 unified log 裡查不到，但 `com.apple.TCC:access` 的 `kTCCServiceAccessibility` 請求查得到——app 在輪詢權限就代表沒授權成功。`CGGetEventTapList` 是判斷「tap 到底有沒有掛上」最直接的工具。
+
+**驗證**：`./build.sh` 乾淨；三套迴歸全過；`~/Applications` 實裝後 `CGGetEventTapList` 有本 app 的 tap；合成 F13 → 追查器記到正確 pid；合成 120ms 右⌥ 輕點 → log 出現 `debounced release confirmed as a real tap — discarding dictation recording`；**`Input-sa-v2.6.1.zip` 解壓到全新路徑實跑，不再 dyld 崩潰**（這正是發版要修的情境）。
+
+**未結案**：`h` 到底是誰打的沒有直接證據。使用者回報 input-sa 失能期間安靜，加上①的機制吻合，嫌疑很重但仍是推論。下次發作先看 `~/Library/Logs/InputSa.log` 的 `synthetic keyDown` / `runaway key repeat`。旁證：這台機器另裝有 McBopomofo 與 `/Library/Input Methods/GOING13.app`（兩者目前都不在啟用的輸入來源清單裡）。
 
 ## ✅ 2026-07-22 完成（他機穩定性兩修 ＋ 七快捷鍵全可自訂，v2.6.0 已發布）
 
