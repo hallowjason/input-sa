@@ -13,5 +13,19 @@
     <!-- com.apple.security.device.microphone is only for App Sandbox apps -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
+    <!-- Load the bundled sherpa-onnx dylibs under Hardened Runtime. -->
+    <!-- Library validation demands that every loaded dylib carry the SAME Team ID -->
+    <!-- as the main executable. This app is signed with a self-signed certificate, -->
+    <!-- which has no Team ID at all, so the check compares "nothing" against -->
+    <!-- "nothing" and rejects the load: -->
+    <!--   Library not loaded: @rpath/libsherpa-onnx-c-api.dylib -->
+    <!--   ... mapping process and mapped file (non-platform) have different Team IDs -->
+    <!-- The app then dies in dyld before main(). Turning library validation off is -->
+    <!-- the supported escape for non-notarized apps that ship their own libraries; -->
+    <!-- the alternative is a paid Developer ID, which this project deliberately -->
+    <!-- avoids. Scope is narrow — the dylibs live inside the signed bundle and are -->
+    <!-- re-signed with the app on every build (see install.sh / package-release.sh). -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
 </dict>
 </plist>

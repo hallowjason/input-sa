@@ -30,6 +30,10 @@ final class InputController: NSObject {
     /// path, plus the physical key it owns entirely until release.
     private var activeKeyHoldAction: ShortcutAction?
     private var activeKeyHoldKeyCode: Int?
+    /// Bumps every time the modifier-hold state changes, so a pending
+    /// "was that release real?" re-check (see verifyDebouncedRelease) can tell
+    /// it belongs to a session that has since ended and quietly stand down.
+    private var modifierDebounceToken = 0
     /// Effective binding for every action, snapshotted from ShortcutSettings and
     /// refreshed on any UserDefaults change (i.e. right after the user edits one).
     private var cachedShortcuts: [ShortcutAction: ShortcutRecorderView.Shortcut] = [:]
@@ -177,6 +181,8 @@ final class InputController: NSObject {
         let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
         let flags   = event.flags
 
+        if type == .keyDown { recordKeystrokeForAttribution(keyCode: keyCode, flags: flags, event: event) }
+
         // ── Modifier-only chord engine (flagsChanged): drives every action bound
         //    to a bare modifier hold. Defaults: right-⌥ dictation, right-⌘
         //    translate, right-⇧ 口頭修正 — but any of the seven can be rebound to
@@ -259,6 +265,57 @@ final class InputController: NSObject {
         return Unmanaged.passRetained(event)
     }
 
+    // MARK: - Keystroke attribution probe
+
+    /// Runaway-repeat tracking: the key currently repeating, how many repeats
+    /// have arrived in a row, and whether this run has already been reported.
+    private var repeatingKeyCode = -1
+    private var repeatingKeyCount = 0
+    private var repeatingKeyReported = false
+
+    /// Answers "what just typed that?" for reports of characters appearing on
+    /// their own. Two things are worth a log line, both rare enough in normal use
+    /// that this costs nothing:
+    ///
+    ///   • A keystroke that some process *posted*. Real hardware carries source
+    ///     PID 0; anything else names the process that synthesized it — which
+    ///     settles whether this app (or any other) is typing into the document.
+    ///   • A key repeating far past what a human hold produces, i.e. a key stuck
+    ///     down somewhere between the hardware and here. Logged once per run, with
+    ///     the source, so a runaway stream can be told apart from an injection.
+    ///
+    /// File I/O is pushed off the tap callback — stalling here risks macOS
+    /// disabling the tap for timing out.
+    private func recordKeystrokeForAttribution(keyCode: Int, flags: CGEventFlags, event: CGEvent) {
+        let srcPID = event.getIntegerValueField(.eventSourceUnixProcessID)
+        let origin = srcPID == 0
+            ? "hardware"
+            : (srcPID == Int64(ProcessInfo.processInfo.processIdentifier)
+               ? "posted by this app" : "posted by pid \(srcPID)")
+
+        if srcPID != 0 {
+            DispatchQueue.main.async {
+                inputSaLog("synthetic keyDown: keyCode=\(keyCode) flags=\(flags.rawValue) — \(origin)")
+            }
+        }
+
+        guard event.getIntegerValueField(.keyboardEventAutorepeat) != 0,
+              keyCode == repeatingKeyCode else {
+            repeatingKeyCode = keyCode
+            repeatingKeyCount = 0
+            repeatingKeyReported = false
+            return
+        }
+        repeatingKeyCount += 1
+        // ~100 repeats is several seconds of holding — past any real keypress.
+        if repeatingKeyCount == 100 && !repeatingKeyReported {
+            repeatingKeyReported = true
+            DispatchQueue.main.async {
+                inputSaLog("runaway key repeat: keyCode=\(keyCode) flags=\(flags.rawValue) — \(origin), 100+ repeats in one run")
+            }
+        }
+    }
+
     // MARK: - Data-driven shortcut dispatch
 
     /// The four device-independent modifier bits currently held, as an
@@ -313,7 +370,8 @@ final class InputController: NSObject {
                 let held = modifierHoldStartTime.map { Date().timeIntervalSince($0) } ?? 1.0
                 if active.isHold && held < 0.3 {
                     NSLog("[InputSa] modifier released too quickly (%.2fs) — debounced", held)
-                    return   // spurious double event; keep waiting for the real release
+                    verifyDebouncedRelease(for: active, shortcut: sc)
+                    return   // maybe a spurious double event — the re-check decides
                 }
                 clearActiveHoldState()
                 if active.isHold { stopHoldAction(active) } else { firePressAction(active) }
@@ -326,10 +384,41 @@ final class InputController: NSObject {
         guard let action = matchingModifierOnlyAction(keyCode: keyCode, mask: mask) else { return }
         activeModifierHoldAction = action
         modifierHoldStartTime = Date()
+        modifierDebounceToken += 1   // invalidate any re-check left over from a prior press
         if action.isHold, !startHoldAction(action, keyCode: keyCode) {
             clearActiveHoldState()   // mic guard failed etc. — don't wait for a release
         }
         // Press actions bound to a bare modifier fire on release (handled above).
+    }
+
+    /// Decide, shortly after a sub-300 ms release, whether it was macOS' spurious
+    /// double flagsChanged (keep recording) or a genuine quick tap (discard).
+    ///
+    /// The debounce exists because macOS occasionally emits a phantom release in
+    /// the middle of a single press-and-hold. But at the instant it fires, a real
+    /// tap looks identical — and swallowing a real tap's release used to leave the
+    /// hold armed *forever*: the mic kept recording unnoticed, and the next
+    /// modifier press (⇧ for a capital letter, ⌘⇥, anything) ended that session,
+    /// transcribed whatever ambient noise had accumulated, and pasted the result
+    /// at the cursor. That is the "app randomly types characters" symptom.
+    ///
+    /// The two cases separate a moment later: after a phantom release the key is
+    /// still physically down, after a real tap it is up. So re-read the live
+    /// modifier state and cancel the recording if the key really is up.
+    private func verifyDebouncedRelease(for action: ShortcutAction,
+                                        shortcut sc: ShortcutRecorderView.Shortcut) {
+        modifierDebounceToken += 1
+        let token = modifierDebounceToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self = self,
+                  token == self.modifierDebounceToken,
+                  self.activeModifierHoldAction == action else { return }
+            // Still held ⇒ the release was spurious; the real one is still coming.
+            guard NSEvent.modifierFlags.rawValue & sc.modifierFlags == 0 else { return }
+            inputSaLog("debounced release confirmed as a real tap — discarding \(action.rawValue) recording")
+            self.clearActiveHoldState()
+            self.cancelActiveRecording(for: action)
+        }
     }
 
     /// keyDown for a matched key-combo action: hold → start + own the key; press → fire.
@@ -367,8 +456,14 @@ final class InputController: NSObject {
 
     private func firePressAction(_ action: ShortcutAction) {
         switch action {
-        case .manualPolish:       triggerManualPolish()
-        case .selectionTranslate: triggerSelectionTranslate()
+        // Both of these start by reading the user's selection, which costs an AX
+        // round-trip and possibly a synthetic ⌘C with a pasteboard poll behind it.
+        // We are inside the event-tap callback here, and the window server holds
+        // every keystroke on the machine until it returns — so hand the work to
+        // the next main-loop turn and get out. Same thread, microseconds later,
+        // but the keyboard is no longer waiting on it.
+        case .manualPolish:       DispatchQueue.main.async { [weak self] in self?.triggerManualPolish() }
+        case .selectionTranslate: DispatchQueue.main.async { [weak self] in self?.triggerSelectionTranslate() }
         case .preferences:
             DispatchQueue.main.async {
                 PreferencesWindowController.shared.showPreferences()
@@ -394,6 +489,7 @@ final class InputController: NSObject {
     private func clearActiveHoldState() {
         activeModifierHoldAction = nil
         modifierHoldStartTime = nil
+        modifierDebounceToken += 1   // any pending release re-check is now stale
     }
 
     private func clearActiveKeyHoldState() {
@@ -486,6 +582,22 @@ final class InputController: NSObject {
                     }
                     self.showError(message)
                 case .success(let transcript):
+                    // Phantom-injection guard. A recording that captured no real
+                    // audio still comes back "successful" — STT models answer
+                    // silence with a short hallucination (a stray letter, 「嗯」,
+                    // 「謝謝觀看」) — and the pipeline would paste that at the
+                    // cursor as if the user had asked for it. Nothing the user
+                    // never said should reach their document, so drop it here,
+                    // ahead of every downstream branch. peak < 0.02 is the same
+                    // "mic captured nothing" threshold the failure path uses
+                    // (≈ −49 dBFS; real speech peaks far above it).
+                    let spoken = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if spoken.isEmpty || self.peakRecordedLevel < 0.02 {
+                        self.debugLog("discarded silent recording (peak \(self.peakRecordedLevel), \(spoken.count) chars) — nothing injected")
+                        self.voiceHUD.hide()
+                        self.flashHUDMessage("沒有收到聲音")
+                        return
+                    }
                     // Spoken tail commands (「……請幫我翻譯成英文」) were removed
                     // 2026-07-06: dictated content that legitimately ends with such a
                     // phrase is indistinguishable from a command, so translation is

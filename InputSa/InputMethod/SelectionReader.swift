@@ -30,6 +30,14 @@ enum SelectionReader {
 
     private static func readViaAX() -> String? {
         let sys = AXUIElementCreateSystemWide()
+        // Bound the AX round-trip. The default messaging timeout is ~6 s, and an
+        // app that is busy or wedged makes every call wait it out. That wait used
+        // to happen on the event-tap callback, i.e. with the whole keyboard held
+        // behind it — the user sees the machine freeze, then macOS times the tap
+        // out and flushes every key that piled up during the stall in one burst.
+        // 250 ms is far longer than a healthy app needs and short enough to feel
+        // like nothing happened when one is not.
+        AXUIElementSetMessagingTimeout(sys, 0.25)
         var focused: AnyObject?
         guard AXUIElementCopyAttributeValue(
             sys, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
