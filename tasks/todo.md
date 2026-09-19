@@ -11,7 +11,7 @@
 - [x] 改善安裝與打包流程：固定簽章、獨立發佈產物、備份與可回復安裝、保留使用者資料。
 - [x] 11 套隔離測試、實際 Whisper runtime 與原生 UI 驗證，獨立程式審查通過；打包／安裝 fixture 通過。
 - [x] 更新 v3.0.0 版本與文件，準備 `tasks/release-v3.0.0.md` 發布說明。
-- [ ] 提交推送並建立 GitHub Release，確認正式 zip 與 checksum。
+- [x] 提交 `c2a0a83` 已推送；[v3.0.0 Release](https://github.com/hallowjason/input-sa/releases/tag/v3.0.0) 已公開，zip 16,227,258 bytes，GitHub SHA-256 與本機 checksum 一致。
 - [x] 安裝正式版本，確認固定簽章、SenseVoice 模型保留、本機啟動與事件攔截器啟用；Whisper 模型安裝校驗及已簽引擎實測通過。
 
 驗證界線：以合成／公開測試音訊做引擎驗證；使用者未提供錄音正確稿，不能宣稱個人準確率改善，也不依此變更既有引擎偏好。Qwen／Ollama／CLI 屬後續選配。

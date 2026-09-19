@@ -2,18 +2,18 @@
 
 ## 上次完成
 - v3.0.0（build 10）完整翻修已編譯、測試及獨立審查通過，已安裝到 `~/Applications/Input-sa.app`。
+- 提交 `c2a0a83` 已推送並發布 [v3.0.0](https://github.com/hallowjason/input-sa/releases/tag/v3.0.0)，tag 指向相同提交；公開 zip/checksum 已核對 GitHub SHA-256：`4641d48a2890a86471a3b42885811b541133a17f715fe8a186f91ac226e7e909`。
 - 使用者選擇：移除道場開關，改通用編號詞庫；Talky 式八語言選擇並依 App 記憶；支援同段錄音自然改口。
 - Whisper large-v3-turbo 可選、模型管理與暫時字幕／全文最終辨識；保留所有既有引擎及原偏好。
 - 本機口述歷史（200 筆／2 MB、不存錄音、可停用清空）、原稿／AI／結果比較；原文、輕整理、結構整理。
 - 依使用者最新回饋將錄音 HUD 縮至 420×156，保留原觀音像與輕浮動，右側字幕；原生預覽驗收。
 - 11 套隔離測試全部通過；Gemini 合成改口測試及 Whisper 官方 JFK、長錄音、取消／重啟實測通過。最後增量佛像 UI 型別檢查、正式 build、程式審查通過。
 - 正式 App 與 zip 均使用既有固定簽章；安裝後確認 v3.0.0/10、原 DR 相符、程序存活且 CGEventTap 啟用。
-- Whisper 模型已在 `~/Library/Application Support/InputSa/models/` 校驗安裝；已簽章引擎完整實测通過。舊版備份：`~/Applications/.inputsa-backups/20260919T111231Z-18980/Input-sa.app`。
+- Whisper 模型已在 `~/Library/Application Support/InputSa/models/` 校驗安裝；已簽章引擎完整實測通過。舊版備份：`~/Applications/.inputsa-backups/20260919T111231Z-18980/Input-sa.app`。
 
 ## 待辦 / 未完成
-- 提交推送、建立 v3.0.0 GitHub Release 並上傳已驗簽 zip/checksum。
 - 使用者本人麥克風／口音／跨 App 使用驗收及 Apple 本地整理品質基準；現有測試不代表個人辨識準確率。
-- 舊有「連續 h」回報仍沒有直接歸因證據，不能宣称已結案。
+- 舊有「連續 h」回報仍沒有直接歸因證據，不能宣稱已結案。
 
 ## 重要決策與限制
 - 不根據公開／合成樣本擅自更換既有引擎偏好。Whisper 要 Apple Silicon/macOS 14+；主程式最低 macOS 12。
