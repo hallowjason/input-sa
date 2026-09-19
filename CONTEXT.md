@@ -1,4 +1,4 @@
-# Session Context — 2026-09-19 v3.1 待安裝發布
+# Session Context — 2026-09-19 v3.1.1 安裝前修正
 
 ## 上次完成
 - v3.0.0 已安裝並發布，歷史紀錄保留於下方。
@@ -12,7 +12,9 @@
 - 使用者指出的長文字截斷、分頁圖示偏位、角色選單內距、快捷鍵對齊均已修正，30 組尺寸／淺深色檢查及原生長文字、選單／取消操作通過。
 - 13 套隔離測試、364 項檢查、最終獨立審查與完整 macOS build 通過。
 - 使用者追加工作路徑減量要求：3.2 GB 多為 build 產物；已確認 Whisper 開發副本與正式安裝模型相同。發布／安裝後清可再生 build 與已有發布附件的 ZIP，保留獨有 Paraformer 備份及原始模型。
-- v3.1.0/build 11 尚未安裝、提交、推送或發布。站立授權已包含完整翻修／上線／安裝。
+- v3.1.0/build 11 已提交 407392b、推送並公開發布；安裝器偵測舊版 SIGTERM 退出死結而保留舊安裝。
+- 正修復 AppDelegate 在 main dispatch callback 內 terminate 的巢狀 run loop 死結，改由 RunLoop.main.perform 呼叫；獨立 fixture 舊版逾時、新版 0.35 秒正常退出。另發 v3.1.1/build 12，不覆寫已發布版本。
+- 站立授權已包含完整翻修／上線／安裝，工作目錄清理待安裝完成。
 
 ## 重要決策與限制
 - 既有 voiceProvider=sherpa、polishProvider=gemini 保持不變。CLI 只接文字整理，翻譯/劃詞問答/口頭加詞仍 Gemini。
@@ -21,7 +23,7 @@
 
 ## 下次繼續
 cd /Users/gooo/Desktop/.claude/projects/input-sa
-# 先看最新工作樹與本段，完成安裝、v3.1.0 發布與工作資料夾減量。
+# 先看最新工作樹與本段，完成 v3.1.1 編譯／審查、安裝退出驗證、發布與工作資料夾減量。
 
 ---
 

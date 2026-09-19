@@ -2,7 +2,7 @@
 
 macOS 語音輸入法。按住右 Option 錄音，放開後自動轉成文字、用 AI 潤飾排版，直接貼到游標所在位置。
 
-v3.1 將偏好設定改為柔和圓角與一般／進階分組，新增可選 Codex／Claude 文字整理，補上中英夾雜的專有名詞提示；保留本地 Whisper、觀音錄音面板、三種整理強度與原稿紀錄。支援 Apple Silicon Mac；主程式最低 macOS 12，本地 Whisper 需 macOS 14 以上，Apple 本地整理需 macOS 26 與 Apple Intelligence。[本版變更](tasks/release-v3.1.0.md)
+v3.1 將偏好設定改為柔和圓角與一般／進階分組，新增可選 Codex／Claude 文字整理，補上中英夾雜的專有名詞提示；保留本地 Whisper、觀音錄音面板、三種整理強度與原稿紀錄。支援 Apple Silicon Mac；主程式最低 macOS 12，本地 Whisper 需 macOS 14 以上，Apple 本地整理需 macOS 26 與 Apple Intelligence。[本版變更](tasks/release-v3.1.1.md)
 
 ## 快速安裝
 

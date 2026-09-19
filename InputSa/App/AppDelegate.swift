@@ -20,7 +20,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // normal termination so history drains and the owned Whisper child exits.
         signal(SIGTERM, SIG_IGN)
         let terminationSignal = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-        terminationSignal.setEventHandler { NSApp.terminate(nil) }
+        terminationSignal.setEventHandler { [weak self] in
+            // terminateLater enters a nested run loop. Leave the main dispatch
+            // callback first so queued drain completions can reply to AppKit.
+            RunLoop.main.perform(inModes: [.common]) { [weak self] in
+                guard let self, !self.isTerminating else { return }
+                NSApp.terminate(nil)
+            }
+        }
         terminationSignal.resume()
         self.terminationSignal = terminationSignal
         // Load bounded local history before the event tap starts; recording
