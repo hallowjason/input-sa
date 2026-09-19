@@ -41,6 +41,7 @@ final class APIKeyStore {
         case groq   = "groq"
         case google = "google"
         case sherpa = "sherpa"
+        case whisper = "whisper"
     }
 
     var voiceProvider: VoiceProvider {
@@ -57,7 +58,7 @@ final class APIKeyStore {
 
     /// Which service handles dictation polish and Option+P text polish. Defaults
     /// to Gemini (cloud); Apple is the fully-offline on-device option. Translation
-    /// and 口頭修正 always use Gemini regardless of this setting.
+    /// and 口頭加詞 always use Gemini regardless of this setting.
     enum PolishProvider: String {
         case gemini = "gemini"
         case apple  = "apple"

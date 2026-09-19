@@ -25,7 +25,7 @@ enum ShortcutAction: String, CaseIterable {
         switch self {
         case .dictation:          return "語音聽寫"
         case .translate:          return "即時翻譯"
-        case .correction:         return "口頭修正"
+        case .correction:         return "口頭加詞"
         case .manualPolish:       return "選字潤飾"
         case .selectionQA:        return "劃詞問答"
         case .selectionTranslate: return "劃詞翻譯"
@@ -36,8 +36,8 @@ enum ShortcutAction: String, CaseIterable {
     var subtitleZh: String {
         switch self {
         case .dictation:          return "說話 → 轉錄 → AI 潤飾 → 輸出至游標"
-        case .translate:          return "說中文，翻譯成目標語言輸出"
-        case .correction:         return "說詞條釋義，Enter 確認加入道場詞庫"
+        case .translate:          return "說中文，點面板語言切換；各 App 記住上次的選擇"
+        case .correction:         return "說詞條釋義，Enter 確認加入字詞庫"
         case .manualPolish:       return "選取文字後按，Enter 接受、Esc 取消"
         case .selectionQA:        return "選取文字後按住說問題，放開顯示答案"
         case .selectionTranslate: return "選取文字後按，浮窗顯示譯文（英／泰）"

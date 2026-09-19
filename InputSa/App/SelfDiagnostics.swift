@@ -49,6 +49,12 @@ enum SelfDiagnostics {
                                 detail: ok ? "模型檔已隨 App 安裝"
                                     : "找不到 model.int8.onnx / tokens.txt——安裝包不完整，請重新安裝"))
         }
+        if APIKeyStore.shared.voiceProvider == .whisper {
+            let ready = WhisperRuntime.isSupported && WhisperRuntime.runtimeInstalled && ModelManager.shared.isReady
+            checks.append(Check(title: "Whisper 本地模型", passed: ready,
+                                detail: ready ? "模型已驗證，執行程式可用"
+                                    : (WhisperRuntime.unavailabilityReason ?? "模型尚未就緒，請從選單列開啟「Whisper 本地模型…」")))
+        }
         return checks
     }
 

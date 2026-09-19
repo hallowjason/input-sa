@@ -15,14 +15,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
 
     static let shared = PreferencesWindowController()
 
-    // MARK: - Dojo mode toggle storage (read by SherpaVoiceService per-transcription)
-    private static let dojoModeKey = "com.inputsa.dojoMode"
-
-    static var dojoMode: Bool {
-        get { UserDefaults.standard.bool(forKey: dojoModeKey) }
-        set { UserDefaults.standard.set(newValue, forKey: dojoModeKey) }
-    }
-
     // MARK: - Mute-while-recording toggle (read by InputController on record start)
     private static let muteWhileRecordingKey = "com.inputsa.muteWhileRecording"
 
@@ -52,6 +44,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
     var polishStatusCaption: NSTextField!
     var polishStatusDot: StatusDotView!
     var muteWhileRecordingSwitch: NSSwitch!
+    var cleanupStylePicker: NSPopUpButton!
     // Shortcuts pane — one recorder per action (all seven are user-rebindable)
     var shortcutRecorders: [ShortcutAction: ShortcutRecorderView] = [:]
     var translatePopUp: NSPopUpButton!
@@ -59,12 +52,11 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
     // Custom-modes pane
     var promptCardList: CardListView!
     var customPrompts: [UserStyleModel.CustomPrompt] = []
-    // Dojo vocabulary pane
+    // General vocabulary pane (legacy storage names preserve existing entries)
     var dojoCardList: CardListView!
     var dojoShareStatusLabel: NSTextField!
     var dojoCountLabel: NSTextField!
     var dojoEntries: [DojoCorrectionTable.Entry] = []
-    var dojoModeSwitch: NSSwitch!
     /// Non-nil while the 🎙 voice-add button is recording.
     var voiceAddService: VoiceServiceProtocol?
     var voiceAddButton: AccentTextButton!
@@ -112,7 +104,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
             .init(title: "語音服務", symbol: "waveform"),
             .init(title: "快捷鍵", symbol: "keyboard"),
             .init(title: "AI 模式", symbol: "sparkles"),
-            .init(title: "道場詞庫", symbol: "character.book.closed"),
+            .init(title: "字詞庫", symbol: "character.book.closed"),
             .init(title: "使用統計", symbol: "chart.bar.xaxis"),
         ], selectedIndex: 0)
         sidebar.onSelect = { [weak self] idx in self?.showPane(idx) }
@@ -121,7 +113,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
             makePane(title: "語音服務", content: makeVoiceServiceContent()),
             makePane(title: "快捷鍵", content: makeShortcutsContent()),
             makePane(title: "AI 模式", content: makeModesContent()),
-            makePane(title: "道場詞庫", content: makeDojoContent()),
+            makePane(title: "字詞庫", content: makeDojoContent()),
             makePane(title: "使用統計", content: makeDashboardContent()),
         ]
 
@@ -214,8 +206,11 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
         case .groq:   providerPicker?.selectItem(at: 0)
         case .google: providerPicker?.selectItem(at: 1)
         case .sherpa: providerPicker?.selectItem(at: 2)
+        case .whisper: providerPicker?.selectItem(at: 3)
         }
         polishProviderPicker?.selectItem(at: APIKeyStore.shared.polishProvider == .apple ? 1 : 0)
+        cleanupStylePicker?.selectItem(at: DictationCleanupStyle.allCases.firstIndex(of: .selected) ?? 1)
+        translatePopUp?.selectItem(withTitle: TranscriptionMode.translateTargetLanguage)
         updateServiceSectionVisibility()
         updateProviderStatus()
         updatePolishProviderStatus()
@@ -224,7 +219,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
         }
         updateShortcutWarning()
         reloadPromptCards()
-        dojoModeSwitch?.state = PreferencesWindowController.dojoMode ? .on : .off
         reloadDojoCards()
         refreshDashboard()
         window?.makeKeyAndOrderFront(nil)

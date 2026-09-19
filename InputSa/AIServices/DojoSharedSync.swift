@@ -1,10 +1,10 @@
 import Foundation
 
-/// Syncs the 道場共編詞庫 (community-edited dojo vocabulary) with a Google Apps
+/// Syncs the community vocabulary with the existing Google Apps
 /// Script endpoint. Deliberately isolated from the transcription hot path: this
 /// only fetches/writes a cache file (`dojo_shared.json`) and asks
-/// `DojoCorrectionTable` to reload. `DojoCorrectionTable.correct(_:dojoMode:)`
-/// never touches the network — sync and input stay separate by design.
+/// `DojoCorrectionTable` to reload. Selecting vocabulary references never
+/// touches the network — sync and input stay separate by design.
 ///
 /// Offline is a normal state: any failure (no connectivity, an HTML error page
 /// while the endpoint's OAuth authorization is still pending, an HTTP error)

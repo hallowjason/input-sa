@@ -30,7 +30,7 @@ extension PreferencesWindowController {
         resetRow.alignment = .centerY
 
         let hint = DesignTokens.caption(
-            "點任一格 → 按下想要的鍵。長按型（聽寫／翻譯／口頭修正／劃詞問答）可只按單顆修飾鍵（如右 ⌥）；按 ⎋ 取消錄製。")
+            "點任一格 → 按下想要的鍵。長按型（聽寫／翻譯／口頭加詞／劃詞問答）可只按單顆修飾鍵（如右 ⌥）；按 ⎋ 取消錄製。")
 
         // Conflict / unmodified-key warning (hidden unless something needs attention).
         shortcutWarningLabel = NSTextField(wrappingLabelWithString: "")
@@ -41,7 +41,9 @@ extension PreferencesWindowController {
 
         // ── Group 2: 外觀與語言 ───────────────────────────────
         let appearanceCard = DesignTokens.groupCard([
-            DesignTokens.row(title: "翻譯目標語言", control: makeTranslatePopUp()),
+            DesignTokens.row(title: "預設翻譯語言",
+                             subtitle: "翻譯面板可直接選語言，各 App 會記住上次的選擇",
+                             control: makeTranslatePopUp()),
             DesignTokens.row(title: "HUD 神佛角色", control: makeCharacterPopUp()),
         ])
 
@@ -130,7 +132,7 @@ extension PreferencesWindowController {
     /// Common translate targets. Gemini's translate prompt takes this string
     /// verbatim (see TranscriptionMode.swift) so any language name works —
     /// this list is just the curated set exposed in the popup.
-    static let translateLanguages = ["英文", "日文", "韓文", "泰文", "越南文", "印尼文"]
+    static var translateLanguages: [String] { TranslationLanguage.targets.map(\.promptName) }
 
     private func makeTranslatePopUp() -> NSPopUpButton {
         let saved = TranscriptionMode.translateTargetLanguage

@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import AVFoundation
+import Darwin
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
@@ -11,8 +12,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var sharedSyncTimer: Timer?
     /// Disabled "今日：N 字・M 次" row, retitled whenever the menu opens.
     private var todaySummaryItem: NSMenuItem?
+    private var isTerminating = false
+    private var terminationSignal: DispatchSourceSignal?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The installer sends SIGTERM only to this exact app. Route it through
+        // normal termination so history drains and the owned Whisper child exits.
+        signal(SIGTERM, SIG_IGN)
+        let terminationSignal = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        terminationSignal.setEventHandler { NSApp.terminate(nil) }
+        terminationSignal.resume()
+        self.terminationSignal = terminationSignal
+        // Load bounded local history before the event tap starts; recording
+        // callbacks only snapshot its in-memory write generation.
+        _ = TranscriptHistoryStore.shared
         setupStatusItem()
 
         // Request microphone permission (required for AVAudioRecorder).
@@ -68,6 +81,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return false
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        WhisperRuntime.shared.shutdown()
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isTerminating else { return .terminateLater }
+        isTerminating = true
+        inputController.prepareToTerminate { sender.reply(toApplicationShouldTerminate: true) }
+        return .terminateLater
+    }
+
     // MARK: - Status Bar
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -89,6 +113,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let menu = NSMenu()
         menu.addItem(withTitle: "偏好設定...", action: #selector(openPreferences), keyEquivalent: ",")
+            .target = self
+        menu.addItem(withTitle: "口述紀錄…", action: #selector(openHistory), keyEquivalent: "")
+            .target = self
+        menu.addItem(withTitle: "Whisper 本地模型…", action: #selector(openModels), keyEquivalent: "")
             .target = self
         menu.addItem(NSMenuItem.separator())
 
@@ -142,12 +170,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.removeAllItems()
         let activeID = TranscriptionMode.activeCustomPromptID
 
-        let standardItem = NSMenuItem(title: "📝 標準潤飾", action: #selector(selectAIMode(_:)),
-                                      keyEquivalent: "")
-        standardItem.target = self
-        standardItem.representedObject = nil as String?
-        standardItem.state = activeID == nil ? .on : .off
-        menu.addItem(standardItem)
+        for style in DictationCleanupStyle.allCases {
+            let item = NSMenuItem(title: style.title, action: #selector(selectCleanupStyle(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = style.rawValue
+            item.toolTip = style.explanation
+            item.state = activeID == nil && DictationCleanupStyle.selected == style ? .on : .off
+            menu.addItem(item)
+        }
 
         let prompts = UserStyleModel.shared.customPrompts
         if !prompts.isEmpty { menu.addItem(NSMenuItem.separator()) }
@@ -164,6 +194,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func selectAIMode(_ sender: NSMenuItem) {
         TranscriptionMode.activeCustomPromptID = sender.representedObject as? String
     }
+
+    @objc private func selectCleanupStyle(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let style = DictationCleanupStyle(rawValue: raw) else { return }
+        DictationCleanupStyle.selected = style
+        TranscriptionMode.activeCustomPromptID = nil
+    }
+
+    @objc private func openHistory() { HistoryWindowController.shared.show() }
+    @objc private func openModels() { WhisperModelWindowController.shared.show() }
 
     @objc private func openPreferences() {
         PreferencesWindowController.shared.showPreferences()

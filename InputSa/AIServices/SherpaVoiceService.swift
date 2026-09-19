@@ -37,6 +37,12 @@ final class SherpaVoiceService: NSObject, VoiceServiceProtocol {
 
     var isRecording: Bool { audioRecorder?.isRecording ?? false }
 
+    static var modelDisplayName: String {
+        guard let resources = Bundle.main.resourcePath else { return "Sherpa" }
+        return FileManager.default.fileExists(atPath: "\(resources)/model/sensevoice/model.int8.onnx")
+            ? "SenseVoice" : "Paraformer"
+    }
+
     /// True when either bundled model directory is complete. SelfDiagnostics
     /// uses this so a broken install surfaces at launch, not on first use.
     static var modelInstalled: Bool {
@@ -100,6 +106,10 @@ final class SherpaVoiceService: NSObject, VoiceServiceProtocol {
     }
 
     func stopAndTranscribe(completion: @escaping (Result<String, Error>) -> Void) {
+        stopAndTranscribeDetailed { completion($0.map(\.normalizedText)) }
+    }
+
+    func stopAndTranscribeDetailed(completion: @escaping (Result<VoiceTranscriptionSnapshot, Error>) -> Void) {
         levelMeter.stop()
         guard !micPermissionDenied else {
             completion(.failure(Err("麥克風權限未授權。請至「系統設定 › 隱私與安全性 › 麥克風」開啟 Input-sa 存取權限。")))
@@ -136,12 +146,12 @@ final class SherpaVoiceService: NSObject, VoiceServiceProtocol {
 
     // MARK: - Local decode
 
-    private func transcribeLocally(audioURL: URL, completion: @escaping (Result<String, Error>) -> Void) {
+    private func transcribeLocally(audioURL: URL, completion: @escaping (Result<VoiceTranscriptionSnapshot, Error>) -> Void) {
         work.async { [weak self] in
             guard let self = self else { return }
             defer { try? FileManager.default.removeItem(at: audioURL) }
 
-            func finish(_ result: Result<String, Error>) {
+            func finish(_ result: Result<VoiceTranscriptionSnapshot, Error>) {
                 DispatchQueue.main.async { completion(result) }
             }
 
@@ -171,14 +181,9 @@ final class SherpaVoiceService: NSObject, VoiceServiceProtocol {
             // 4. Simplified → Traditional (Taiwan).
             let traditional = OpenCCConverter.shared.convert(simplified)
 
-            // 5. Dojo homophone corrections (always + optional dojoOnly tier).
-            let dojoMode = UserDefaults.standard.bool(forKey: "com.inputsa.dojoMode")
-            let corrected = DojoCorrectionTable.shared.correct(traditional, dojoMode: dojoMode)
-            inputSaLog("STT raw: \(String(simplified.prefix(120)))")
-            if corrected != traditional {
-                inputSaLog("dojo corrected: \(String(corrected.prefix(120)))")
-            }
-            finish(.success(corrected))
+            inputSaLog("STT completed (\(simplified.count) chars)")
+            finish(.success(VoiceTranscriptionSnapshot(rawText: simplified, normalizedText: traditional,
+                                                       engine: Self.modelDisplayName)))
         }
     }
 

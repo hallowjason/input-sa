@@ -2,5 +2,6 @@
 /vendor/models-backup/
 /InputSa/Resources/model/sensevoice/*.onnx
 *.zip
+*.zip.sha256
 .DS_Store
 /.claude/

@@ -116,7 +116,14 @@ final class ApplePolishService {
             // so there is nothing useful to stream — `onPartial` is intentionally
             // unused and the HUD keeps its static "AI 潤飾中（本地）…" state.
             _ = onPartial
-            let prompt = mode.systemPrompt(transcript: text)
+            // The on-device model is more prone to expanding short utterances
+            // from a large glossary. Use a smaller reference budget than Gemini,
+            // scale it down for short speech, and leave more room for long input.
+            // This is a character heuristic, not a guarantee of token capacity.
+            let vocabularyBudget = min(240, max(48, text.count * 2), max(0, 1200 - text.count))
+            let terms = DojoCorrectionTable.shared.preferredTerms(
+                for: text, maxTerms: 24, maxCharacters: vocabularyBudget)
+            let prompt = mode.systemPrompt(transcript: text, vocabularyTerms: terms)
             // Standard polish preserves meaning — output length ≈ input length,
             // so it gets a tight plausibility bound. Custom styles (IG 貼文 etc.)
             // may legitimately expand, so only they keep the loose one.
@@ -166,6 +173,8 @@ final class ApplePolishService {
     /// occur in dictated speech.
     private static let scaffoldFingerprints = [
         "<transcript", "</transcript", "領域詞彙表", "口述文字編輯", "詞彙表規則",
+        "<vocabulary_reference", "</vocabulary_reference",
+        "上述範例僅示範如何理解本次錄音",
         "整段語意", "逐字保守替換", "口頭禪贅字", "整理後的文字", "待整理的資料",
         "風格指令", "待處理的資料",
         // Commentary tells: the model sometimes appends an explanation of the

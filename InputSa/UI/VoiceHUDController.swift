@@ -440,7 +440,7 @@ private final class DojoConfirmView: NSView {
     /// outer stack (BadgePill sizes via internal constraints), so the caller
     /// enforces it as the card's minimum width instead.
     private static func buildConfirmStack(correct: String, wrong: String) -> (NSStackView, CGFloat) {
-        let title = NSTextField(labelWithString: "加入道場詞庫？")
+        let title = NSTextField(labelWithString: "加入字詞庫？")
         title.font = DesignTokens.monoFont(13, weight: .bold)
         title.textColor = .secondaryLabelColor
 

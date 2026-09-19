@@ -15,11 +15,11 @@ final class DojoEntrySheet: NSObject {
     private let sheet: NSWindow
     private let correctField = NSTextField()
     private let wrongField = NSTextField()
-    private let tierPicker: PillSegmentedControl
-    private let phoneticSwitch = NSSwitch()
+    /// Retain historical metadata when editing; it no longer controls changes.
+    private let initialEntry: DojoCorrectionTable.Entry?
     private let shareSwitch = NSSwitch()
     /// Completion carries the entry plus whether the user opted to share it to
-    /// the 道場共編詞庫 (default off — protects personal preference terms).
+    /// the community vocabulary (default off — protects personal terms).
     private let completion: (DojoCorrectionTable.Entry?, Bool) -> Void
 
     /// `initial` prefills the form (existing entry being edited, or a
@@ -37,48 +37,33 @@ final class DojoEntrySheet: NSObject {
     private init(title: String, initial: DojoCorrectionTable.Entry?,
                  completion: @escaping (DojoCorrectionTable.Entry?, Bool) -> Void) {
         self.completion = completion
-        self.tierPicker = PillSegmentedControl(
-            labels: ["一律套用", "限道場模式"],
-            selectedIndex: initial?.tier == "dojoOnly" ? 1 : 0)
+        self.initialEntry = initial
         self.sheet = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 10),
             styleMask: [.titled], backing: .buffered, defer: false)
         super.init()
 
-        correctField.placeholderString = "正確詞（如：妙極大帝）"
+        correctField.placeholderString = "例如：維宸、Input-sa、專案名稱"
         correctField.stringValue = initial?.correct ?? ""
         correctField.font = DesignTokens.monoFont(13)
 
-        wrongField.placeholderString = "選填——留空時只靠同音比對糾正"
+        wrongField.placeholderString = "選填——記下曾經辨識錯的寫法"
         wrongField.stringValue = initial.map { $0.wrong == $0.correct ? "" : $0.wrong } ?? ""
         wrongField.font = DesignTokens.monoFont(13)
-
-        phoneticSwitch.state = (initial?.phonetic ?? true) ? .on : .off
-        let phoneticLabel = NSTextField(labelWithString: "同音變體一併糾正（妙吉／妙急…都會比對到）")
-        phoneticLabel.font = DesignTokens.monoFont(11)
-        let phoneticRow = NSStackView(views: [phoneticSwitch, phoneticLabel])
-        phoneticRow.orientation = .horizontal
-        phoneticRow.spacing = DesignTokens.Spacing.compact
-        phoneticRow.alignment = .centerY
 
         // Share opt-in — default OFF so personal preference terms aren't pushed to
         // the community pool unless the user deliberately chooses to.
         shareSwitch.state = .off
-        let shareLabel = NSTextField(labelWithString: "同時分享到道場共編詞庫（送審後道友共用）")
+        let shareLabel = NSTextField(labelWithString: "同時分享到共編詞庫（送審後供其他人參考）")
         shareLabel.font = DesignTokens.monoFont(11)
         let shareRow = NSStackView(views: [shareSwitch, shareLabel])
         shareRow.orientation = .horizontal
         shareRow.spacing = DesignTokens.Spacing.compact
         shareRow.alignment = .centerY
 
-        tierPicker.translatesAutoresizingMaskIntoConstraints = false
-        tierPicker.widthAnchor.constraint(equalToConstant: 260).isActive = true
-
         let grid = DesignTokens.makeFieldGrid([
-            [fieldLabel("正確詞"), correctField],
-            [fieldLabel("常見誤辨"), wrongField],
-            [fieldLabel("套用範圍"), tierPicker],
-            [NSView(), phoneticRow],
+            [fieldLabel("字詞"), correctField],
+            [fieldLabel("誤辨備註"), wrongField],
             [NSView(), shareRow],
         ])
         SheetChrome.install(on: sheet, title: title, content: grid,
@@ -91,14 +76,13 @@ final class DojoEntrySheet: NSObject {
         let correct = correctField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !correct.isEmpty else { NSSound.beep(); return }
         var wrong = wrongField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Empty "wrong" means the user only knows the correct term (the common
-        // voice-added case) — store wrong == correct so the exact-replacement
-        // pass is a no-op and the phonetic pass does all the work.
+        // Keep the legacy no-alias representation for existing readers. The
+        // vocabulary now supplies spelling references, never replacement rules.
         if wrong.isEmpty { wrong = correct }
         let entry = DojoCorrectionTable.Entry(
             wrong: wrong, correct: correct,
-            tier: tierPicker.selectedIndex == 1 ? "dojoOnly" : "always",
-            phonetic: phoneticSwitch.state == .on)
+            tier: initialEntry?.tier ?? "always",
+            phonetic: initialEntry?.phonetic ?? false)
         endSheet(with: entry, share: shareSwitch.state == .on)
     }
 

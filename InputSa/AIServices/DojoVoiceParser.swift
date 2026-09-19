@@ -1,7 +1,7 @@
 import Foundation
 
-/// Shared parser for the 口頭修正 (voice-added vocabulary) feature: takes the
-/// transcript of a spoken clarification (「崇正寶宮的崇是崇高的崇…」), asks
+/// Shared parser for voice-added vocabulary: takes the
+/// transcript of a spoken clarification (「陳怡君的怡是怡然的怡…」), asks
 /// Gemini to reconstruct the intended term, and returns a ready-to-save
 /// `DojoCorrectionTable.Entry`. Used by both entry points — the global
 /// right-Shift PTT and the microphone button on the Preferences dojo tab.
@@ -30,12 +30,11 @@ enum DojoVoiceParser {
                 }
                 let correct = parsed.correct.trimmingCharacters(in: .whitespacesAndNewlines)
                 var wrong = parsed.wrong.trimmingCharacters(in: .whitespacesAndNewlines)
-                // No spoken mishearing given → wrong == correct: the exact-
-                // replacement pass becomes a no-op and the phonetic pass (which
-                // only needs `correct`) does all the work.
+                // Preserve the existing file/editor convention when no common
+                // mishearing was supplied. Entries are AI references only.
                 if wrong.isEmpty { wrong = correct }
                 completion(.success(DojoCorrectionTable.Entry(
-                    wrong: wrong, correct: correct, tier: "always", phonetic: true)))
+                    wrong: wrong, correct: correct, tier: "always", phonetic: false)))
             }
         }
     }

@@ -21,9 +21,10 @@ extension PreferencesWindowController {
         case .groq:   initialProviderIdx = 0
         case .google: initialProviderIdx = 1
         case .sherpa: initialProviderIdx = 2
+        case .whisper: initialProviderIdx = 3
         }
         providerPicker = DesignTokens.popup(
-            items: ["Groq Whisper", "Google STT（含台語）", "本地 Paraformer"],
+            items: ["Groq Whisper", "Google STT（含台語）", "本地 \(SherpaVoiceService.modelDisplayName)", "本地 Whisper Turbo"],
             selectedIndex: initialProviderIdx,
             target: self, action: #selector(providerPopupChanged(_:)))
 
@@ -52,6 +53,8 @@ extension PreferencesWindowController {
         muteWhileRecordingSwitch.state = PreferencesWindowController.muteWhileRecording ? .on : .off
         muteWhileRecordingSwitch.target = self
         muteWhileRecordingSwitch.action = #selector(muteWhileRecordingChanged)
+        let modelButton = NSButton(title: "管理模型…", target: self, action: #selector(openWhisperModelManager))
+        modelButton.bezelStyle = .rounded
 
         let transcribeCard = DesignTokens.groupCard([
             status.row,
@@ -60,14 +63,16 @@ extension PreferencesWindowController {
             groqSection,
             googleSection,
             DesignTokens.hairline(),
+            DesignTokens.row(title: "Whisper 本地模型", subtitle: "約 1.6 GB · Apple Silicon／macOS 14 以上", control: modelButton),
+            DesignTokens.hairline(),
             DesignTokens.row(title: "錄音時靜音喇叭",
                              subtitle: "按住錄音時暫時靜音系統喇叭，避免外放聲音被錄進去",
                              control: muteWhileRecordingSwitch),
         ], autoSeparators: false)
 
         let serviceHint = DesignTokens.caption(
-            "Groq 免費、繁體中文最穩 · Google STT 每月 60 分鐘免費、支援國語＋台語 · " +
-            "本地 Paraformer 完全離線、免 API Key。未選取服務的 Key 仍保留在 Keychain，隨時可切回。")
+            "Groq／Google STT 會將錄音送到所選雲端服務；本地 SenseVoice／Paraformer 與 Whisper 於這台 Mac 辨識。" +
+            "Whisper 支援錄音暫時字幕，停止後重新辨識完整內容；其他引擎於放開後顯示結果。")
 
         // ── Group 2: AI 潤飾服務 ────────────────────────────────
         let polishStatus = DesignTokens.statusRow(caption: "目前使用",
@@ -83,11 +88,16 @@ extension PreferencesWindowController {
             target: self, action: #selector(polishPopupChanged(_:)))
 
         geminiField = makeKeyField(placeholder: "AIzaSy...")
+        cleanupStylePicker = DesignTokens.popup(items: DictationCleanupStyle.allCases.map(\.title),
+            selectedIndex: DictationCleanupStyle.allCases.firstIndex(of: .selected) ?? 1,
+            target: self, action: #selector(cleanupStyleChanged(_:)))
 
         let polishCard = DesignTokens.groupCard([
             polishStatus.row,
             DesignTokens.hairline(),
             DesignTokens.row(title: "服務", control: polishProviderPicker),
+            DesignTokens.hairline(),
+            DesignTokens.row(title: "口述整理強度", subtitle: "原文不呼叫 AI；輕整理保留用詞；結構整理分段列點", control: cleanupStylePicker),
             conditionalSection(rows: [   // not conditional, but reuses the hairline wrapper
                 DesignTokens.row(title: "Gemini API Key", control: geminiField),
                 trailingLinkRow(note: nil,
@@ -97,14 +107,14 @@ extension PreferencesWindowController {
         ], autoSeparators: false)
 
         let polishHint = DesignTokens.caption(
-            "Gemini 品質最佳，需網路與 API Key · Apple 本地完全離線、免 Key（需 macOS 26 ＋ " +
-            "Apple Intelligence）。翻譯（右 ⌘）與口頭修正固定使用 Gemini，不受此設定影響。")
+            "Gemini 需網路與 API Key · Apple 本地完全離線、免 Key（需 macOS 26 ＋ " +
+            "Apple Intelligence）。翻譯（右 ⌘）與口頭加詞固定使用 Gemini，不受此設定影響。")
 
         // ── Auto-save (macOS preferences convention: no explicit save button;
         //    keys are written to Keychain the moment a field ends editing) ──
         [groqField, googleSttField, geminiField].forEach { $0.delegate = self }
 
-        // ── Group 3: 道場共編詞庫（community nickname）──────────
+        // ── Group 3: 共編詞庫（community nickname）──────────────
         communityNicknameField = NSTextField()
         communityNicknameField.placeholderString = "選填——分享詞條時附上的署名"
         communityNicknameField.font = DesignTokens.uiFont(12)
@@ -119,8 +129,8 @@ extension PreferencesWindowController {
             DesignTokens.row(title: "共編暱稱", control: communityNicknameField),
         ])
         let communityHint = DesignTokens.caption(
-            "App 啟動時自動同步道友共享的「已審核」詞條（帶「共編」標記、唯讀）。" +
-            "口頭修正時可選擇分享自己的詞條；暱稱僅用於標示分享者，可留空。")
+            "App 啟動時自動同步社群共享的「已審核」詞條（帶「共編」標記、唯讀）。" +
+            "口頭加詞時可選擇分享自己的詞條；暱稱僅用於標示分享者，可留空。")
 
         let noteLabel = DesignTokens.caption(
             "API Key 修改後自動儲存至系統 Keychain。Gemini 為選填，未設定時跳過 AI 潤飾步驟。")
@@ -129,7 +139,7 @@ extension PreferencesWindowController {
         let stack = NSStackView(views: [
             DesignTokens.group(title: "語音轉錄服務", card: transcribeCard, footnote: serviceHint),
             DesignTokens.group(title: "AI 潤飾服務", card: polishCard, footnote: polishHint),
-            DesignTokens.group(title: "道場共編詞庫", card: communityCard, footnote: communityHint),
+            DesignTokens.group(title: "共編詞庫", card: communityCard, footnote: communityHint),
             noteLabel,
         ])
         stack.orientation = .vertical
@@ -150,7 +160,7 @@ extension PreferencesWindowController {
 
     /// Mono API-key field, fixed trailing width.
     private func makeKeyField(placeholder: String) -> NSTextField {
-        let field = NSTextField()
+        let field = NSSecureTextField()
         field.placeholderString = placeholder
         field.font = DesignTokens.monoFont(11)
         field.isEditable = true
@@ -248,6 +258,13 @@ extension PreferencesWindowController {
         switch selectedIndex {
         case 1:  provider = .google
         case 2:  provider = .sherpa
+        case 3:
+            guard WhisperRuntime.isSupported, WhisperRuntime.runtimeInstalled, ModelManager.shared.isReady else {
+                providerPicker.selectItem(at: [.groq, .google, .sherpa, .whisper].firstIndex(of: APIKeyStore.shared.voiceProvider) ?? 0)
+                WhisperModelWindowController.shared.show()
+                return
+            }
+            provider = .whisper
         default: provider = .groq
         }
         APIKeyStore.shared.voiceProvider = provider
@@ -261,7 +278,8 @@ extension PreferencesWindowController {
     func updateProviderStatus() {
         let value: String
         switch APIKeyStore.shared.voiceProvider {
-        case .sherpa: value = "本地 Paraformer · 完全離線"
+        case .sherpa: value = "本地 \(SherpaVoiceService.modelDisplayName) · 完全離線"
+        case .whisper: value = "Whisper Turbo · 完全離線"
         case .groq:   value = "Groq Whisper（雲端）· 需網路"
         case .google: value = "Google STT（雲端）· 需網路"
         }
@@ -295,10 +313,18 @@ extension PreferencesWindowController {
         case .google:
             groqSection?.isHidden = true
             googleSection?.isHidden = false
-        case .sherpa:
+        case .sherpa, .whisper:
             groqSection?.isHidden = true
             googleSection?.isHidden = true
         }
+    }
+
+    @objc private func openWhisperModelManager() { WhisperModelWindowController.shared.show() }
+
+    @objc private func cleanupStyleChanged(_ sender: NSPopUpButton) {
+        guard DictationCleanupStyle.allCases.indices.contains(sender.indexOfSelectedItem) else { return }
+        DictationCleanupStyle.selected = DictationCleanupStyle.allCases[sender.indexOfSelectedItem]
+        TranscriptionMode.activeCustomPromptID = nil
     }
 
     /// Clickable link — Palette.link, the pane's only text-colour accent.

@@ -22,7 +22,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.6.1</string>
+	<string>3.0.0</string>
 	<key>CFBundleSignature</key>
 	<string>INSA</string>
 	<key>CFBundleSupportedPlatforms</key>
@@ -30,13 +30,13 @@
 		<string>MacOSX</string>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>9</string>
+	<string>10</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>12.0</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAccessibilityUsageDescription</key>
-	<string>Input-sa 需要輔助使用功能權限來攔截鍵盤事件並實現注音輸入。</string>
+	<string>Input-sa 需要輔助使用功能權限來偵測語音快捷鍵，並將完成的文字輸入目前的 App。</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

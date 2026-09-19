@@ -1,0 +1,4 @@
+whisper.cpp v1.9.1
+commit f049fff95a089aa9969deb009cdd4892b3e74916
+arm64 macOS 14.0
+static ggml, embedded Metal

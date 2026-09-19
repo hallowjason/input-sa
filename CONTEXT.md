@@ -1,3 +1,36 @@
+# Session Context — 2026-09-19
+
+## 上次完成
+- v3.0.0（build 10）完整翻修已編譯、測試及獨立審查通過，已安裝到 `~/Applications/Input-sa.app`。
+- 使用者選擇：移除道場開關，改通用編號詞庫；Talky 式八語言選擇並依 App 記憶；支援同段錄音自然改口。
+- Whisper large-v3-turbo 可選、模型管理與暫時字幕／全文最終辨識；保留所有既有引擎及原偏好。
+- 本機口述歷史（200 筆／2 MB、不存錄音、可停用清空）、原稿／AI／結果比較；原文、輕整理、結構整理。
+- 依使用者最新回饋將錄音 HUD 縮至 420×156，保留原觀音像與輕浮動，右側字幕；原生預覽驗收。
+- 11 套隔離測試全部通過；Gemini 合成改口測試及 Whisper 官方 JFK、長錄音、取消／重啟實測通過。最後增量佛像 UI 型別檢查、正式 build、程式審查通過。
+- 正式 App 與 zip 均使用既有固定簽章；安裝後確認 v3.0.0/10、原 DR 相符、程序存活且 CGEventTap 啟用。
+- Whisper 模型已在 `~/Library/Application Support/InputSa/models/` 校驗安裝；已簽章引擎完整實测通過。舊版備份：`~/Applications/.inputsa-backups/20260919T111231Z-18980/Input-sa.app`。
+
+## 待辦 / 未完成
+- 提交推送、建立 v3.0.0 GitHub Release 並上傳已驗簽 zip/checksum。
+- 使用者本人麥克風／口音／跨 App 使用驗收及 Apple 本地整理品質基準；現有測試不代表個人辨識準確率。
+- 舊有「連續 h」回報仍沒有直接歸因證據，不能宣称已結案。
+
+## 重要決策與限制
+- 不根據公開／合成樣本擅自更換既有引擎偏好。Whisper 要 Apple Silicon/macOS 14+；主程式最低 macOS 12。
+- 本地辨識不代表 AI 整理也離線；保留原 Gemini/Apple 選擇。「原文」繞過 AI，保留改口過程。
+- 未複製 Talky 品牌或資產；官方 whisper.cpp runtime 固定版本並附授權，模型外置。Qwen／Ollama／CLI 為後續選配。
+- `design-refs/` 是原有未追蹤使用者素材，勿加入提交。不要重設 TCC 或更換簽章憑證。
+- 安裝後 CUA 無法讀取無視窗選單列 App（逾時）；以程序取樣證實主執行緒正常等待事件、CGGetEventTapList 確認 tap 啟用。UI 元件另以隔離原生預覽驗證。
+- 長期實作報告與發布說明：`tasks/talky-integration-study.md`、`tasks/release-v3.0.0.md`；此檔的 stop hook 曾覆蓋歷史，本次已完整保留原紀錄於下方。
+
+## 下次繼續
+cd /Users/gooo/Desktop/.claude/projects/input-sa
+# 先看本段、tasks/todo.md 及 release 狀態，再繼續使用者實測回饋。
+
+---
+
+# 歷史紀錄（以下保留原文，狀態以本頁最新摘要為準）
+
 # Session Context — 最後更新 2026-08-07
 
 ## 🔵 目前狀態（一句話）

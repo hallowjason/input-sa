@@ -11,6 +11,21 @@ final class InputController: NSObject {
     // voiceHUD / voiceService are `internal` (not private) so the select-and-act
     // flows in SelectionActions.swift (a cross-file extension) can drive them.
     let voiceHUD      = VoiceHUDController()
+    private let translationHUD = TranslationHUDController()
+    private var translationSession: TranslationSession?
+    private var translationSnapshot: VoiceTranscriptionSnapshot?
+    private var translationAIText: String?
+    private var translationAppName: String?
+    private var translationStartedAt = Date()
+    private var translationHistoryGeneration = UUID()
+    private let dictationHUD = DictationHUDController()
+    private var dictationSession: DictationSession?
+    private var dictationMode: TranscriptionMode = .standard
+    private var dictationStyle: DictationCleanupStyle = .light
+    private var dictationIsVocabulary = false
+    private var dictationHistoryGeneration = UUID()
+    private var currentVoiceProvider: APIKeyStore.VoiceProvider = .groq
+    private let historyQueue = DispatchQueue(label: "com.inputsa.history.save", qos: .utility)
     private let polishPreview = PolishPreviewController()
     var voiceService: VoiceServiceProtocol = GroqVoiceService()
 
@@ -37,7 +52,7 @@ final class InputController: NSObject {
     /// Effective binding for every action, snapshotted from ShortcutSettings and
     /// refreshed on any UserDefaults change (i.e. right after the user edits one).
     private var cachedShortcuts: [ShortcutAction: ShortcutRecorderView.Shortcut] = [:]
-    /// Voice-parsed dojo entry awaiting the user's Enter (save) / Esc (discard).
+    /// Voice-parsed vocabulary entry awaiting the user's Enter (save) / Esc (discard).
     private var pendingDojoEntry: DojoCorrectionTable.Entry?
     /// Wall-clock start of the current recording, captured in handleVoiceKeyDown.
     /// The type-specific *RecordingStartTime properties are nil'd before the async
@@ -51,6 +66,7 @@ final class InputController: NSObject {
     /// entries with a 3-minute TTL. Only the right-⌥ dictation path writes here;
     /// translation / ⌥P / 劃詞問答 deliberately do not.
     private var recentUtterances: [(text: String, at: Date)] = []
+    private var priorContextAppID: String?
     /// 劃詞問答 (⌃⌥Q): true while holding Q to record a spoken question, and the
     /// selection captured the instant Q went down (before the mic opens).
     var qaKeyRecording = false
@@ -133,9 +149,22 @@ final class InputController: NSObject {
     }
 
     func stop() {
+        if let token = translationSession?.id { cancelTranslation(token: token) }
+        if let token = dictationSession?.id { cancelDictation(token: token) }
+        voiceService.cancelRecording()
+        SystemAudioMute.shared.endMute()
+        voiceHUD.hide()
+        dictationHUD.hide()
         if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let src = runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes) }
         NotificationCenter.default.removeObserver(self)
+    }
+
+    /// Keep the main run loop alive while durable history writes finish.
+    /// A synchronous drain could deadlock with UI notification observers.
+    func prepareToTerminate(completion: @escaping () -> Void) {
+        stop()
+        historyQueue.async { DispatchQueue.main.async(execute: completion) }
     }
 
     private func refreshShortcutCache() {
@@ -148,11 +177,20 @@ final class InputController: NSObject {
     private func refreshVoiceService() {
         // Skip recreation if already recording — provider switch mid-session is harmless
         // (the old service holds its own state until the completion fires).
-        guard !voiceService.isRecording else { return }
+        guard !voiceService.isRecording, !isAnyRecordingActive else { return }
+        refreshVoiceServiceForRecording()
+    }
+
+    private func refreshVoiceServiceForRecording() {
+        guard currentVoiceProvider != APIKeyStore.shared.voiceProvider else { return }
+        voiceService.onPartialText = nil
+        voiceService.onLevelUpdate = nil
+        currentVoiceProvider = APIKeyStore.shared.voiceProvider
         switch APIKeyStore.shared.voiceProvider {
         case .groq:   voiceService = GroqVoiceService()
         case .google: voiceService = GoogleVoiceService()
         case .sherpa: voiceService = SherpaVoiceService()
+        case .whisper: voiceService = WhisperVoiceService()
         }
     }
 
@@ -170,6 +208,41 @@ final class InputController: NSObject {
             return Unmanaged.passRetained(event)
         }
 
+        // A chip can stop the microphone while its physical shortcut is still
+        // held. Keep owning that key through release, including when another
+        // window has become key; never leak its autorepeat or keyUp.
+        let ownedKeyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
+        if let action = activeKeyHoldAction,
+           [.translate, .dictation, .correction].contains(action), ownedKeyCode == activeKeyHoldKeyCode,
+           type == .keyDown || type == .keyUp {
+            if type == .keyUp {
+                clearActiveKeyHoldState()
+                stopHoldAction(action)
+            }
+            return nil
+        }
+        if type == .flagsChanged {
+            // Wait until the event has left this tap before synthesizing a paste.
+            DispatchQueue.main.async { [weak self] in
+                self?.attemptTranslationDelivery()
+                self?.attemptDictationDelivery()
+            }
+            if let action = activeModifierHoldAction, [.translate, .dictation, .correction].contains(action) {
+                handleModifierChordChange(keyCode: ownedKeyCode, flags: event.flags)
+                return Unmanaged.passRetained(event)
+            }
+        }
+        if type == .keyDown, ownedKeyCode == kVKEscape,
+           let session = translationSession, session.isActive {
+            cancelTranslation(token: session.id)
+            return nil
+        }
+        if type == .keyDown, ownedKeyCode == kVKEscape,
+           let session = dictationSession, session.isActive {
+            cancelDictation(token: session.id)
+            return nil
+        }
+
         // ── Bypass when ShortcutRecorderView is actively capturing a new shortcut,
         //    OR when the Preferences window is the key window.
         //    Both conditions ensure the local NSEvent monitor in ShortcutRecorderView fires.
@@ -185,7 +258,7 @@ final class InputController: NSObject {
 
         // ── Modifier-only chord engine (flagsChanged): drives every action bound
         //    to a bare modifier hold. Defaults: right-⌥ dictation, right-⌘
-        //    translate, right-⇧ 口頭修正 — but any of the seven can be rebound to
+        //    translate, right-⇧ 口頭加詞 — but any of the seven can be rebound to
         //    a bare modifier, so this is entirely data-driven from cachedShortcuts.
         //    Left-side modifiers keep native macOS behaviour unless a user picks one.
         if type == .flagsChanged {
@@ -204,7 +277,7 @@ final class InputController: NSObject {
         // ── Manual polish preview (⌥P) is also a non-activating panel, so its
         //    keys are caught here: ↩/⇥ accept, ⎋ reject. Any other keyDown
         //    dismisses without injecting and passes through (same no-stuck-modal
-        //    contract as the pending 口頭修正 entry below).
+        //    contract as the pending 口頭加詞 entry below).
         if type == .keyDown && polishPreview.isActive {
             if handlePolishPreviewKey(keyCode: keyCode) { return nil }
             polishPreview.reject()
@@ -223,7 +296,7 @@ final class InputController: NSObject {
             return nil
         }
 
-        // ── Pending 口頭修正 entry: Enter saves, Esc discards, anything else
+        // ── Pending 口頭加詞 entry: Enter saves, Esc discards, anything else
         //    dismisses and passes through (no stuck modal state).
         if type == .keyDown, let entry = pendingDojoEntry {
             pendingDojoEntry = nil
@@ -437,8 +510,12 @@ final class InputController: NSObject {
 
     @discardableResult
     private func startHoldAction(_ action: ShortcutAction, keyCode: Int) -> Bool {
+        refreshVoiceServiceForRecording()
+        if action != .translate { translationHUD.hide() }
         switch action {
-        case .dictation, .translate, .correction: return handleVoiceKeyDown()
+        case .dictation:             return handleVoiceKeyDown()
+        case .correction:            return handleVoiceKeyDown(correction: true)
+        case .translate:             return startTranslationRecording()
         case .selectionQA:                        return startSelectionQA()
         case .manualPolish, .selectionTranslate, .preferences: return false
         }
@@ -447,7 +524,7 @@ final class InputController: NSObject {
     private func stopHoldAction(_ action: ShortcutAction) {
         switch action {
         case .dictation:   handleVoiceKeyUp()
-        case .translate:   handleVoiceKeyUp(translate: true)
+        case .translate:   translationShortcutReleased()
         case .correction:  handleVoiceKeyUp(correction: true)
         case .selectionQA: finishSelectionQA()
         case .manualPolish, .selectionTranslate, .preferences: break
@@ -477,6 +554,14 @@ final class InputController: NSObject {
     /// press action that was merely pending a modifier release.
     private func cancelActiveRecording(for action: ShortcutAction) {
         guard action.isHold else { return }
+        if action == .translate, let token = translationSession?.id {
+            cancelTranslation(token: token)
+            return
+        }
+        if action == .dictation || action == .correction, let token = dictationSession?.id {
+            cancelDictation(token: token)
+            return
+        }
         SystemAudioMute.shared.endMute()   // restore speaker on the combo-cancel path
         if action == .selectionQA {
             qaKeyRecording = false
@@ -501,6 +586,7 @@ final class InputController: NSObject {
     /// Returns the currently focused UI element, or nil if unavailable.
     private func focusedElement() -> AXUIElement? {
         let sys = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(sys, 0.25)
         var el: AnyObject?
         guard AXUIElementCopyAttributeValue(sys, kAXFocusedUIElementAttribute as CFString, &el) == .success
         else { return nil }
@@ -537,8 +623,19 @@ final class InputController: NSObject {
     /// guard blocks it, so the dispatch layer can clear the active-action state
     /// (which it set before calling in) instead of leaving a phantom recording.
     @discardableResult
-    private func handleVoiceKeyDown() -> Bool {
+    private func handleVoiceKeyDown(correction: Bool = false) -> Bool {
         guard micReadyOrExplain() else { return false }
+        refreshVoiceServiceForRecording()
+        let app = NSWorkspace.shared.frontmostApplication
+        let session = DictationSession(appID: app?.bundleIdentifier, appName: app?.localizedName,
+                                       processID: app?.processIdentifier)
+        let token = session.id
+        dictationSession = session
+        dictationHistoryGeneration = TranscriptHistoryStore.shared.generation
+        dictationIsVocabulary = correction
+        dictationMode = TranscriptionMode.activePolishMode
+        dictationStyle = TranscriptionMode.activePolishModeName == nil ? DictationCleanupStyle.selected : .structured
+        dictationHUD.onCancel = { [weak self] in self?.cancelDictation(token: token) }
         peakRecordedLevel = 0
         recordingStartTime = Date()   // unified start for usage-stats duration
         recordingTargetElement = focusedElement()  // snapshot before HUD steals focus
@@ -552,36 +649,54 @@ final class InputController: NSObject {
         }
         voiceService.onLevelUpdate = { [weak self] level in
             DispatchQueue.main.async {
-                guard let self = self else { return }
+                guard let self = self, self.dictationSession?.id == token,
+                      self.dictationSession?.phase == .recording else { return }
                 self.peakRecordedLevel = max(self.peakRecordedLevel, level)
-                self.voiceHUD.updateAudioLevel(level)
+                if correction { self.voiceHUD.updateAudioLevel(level) }
+                else { self.dictationHUD.setAudioLevel(level) }
+            }
+        }
+        voiceService.onPartialText = { [weak self] partial in
+            DispatchQueue.main.async {
+                guard let self = self, !correction, self.dictationSession?.id == token,
+                      self.dictationSession?.phase == .recording else { return }
+                self.dictationHUD.setText(partial, provisional: true)
             }
         }
         voiceService.startRecording()
-        voiceHUD.show(state: .recording, near: getCursorRect(), on: NSScreen.main)
+        if correction {
+            voiceHUD.show(state: .recording, near: getCursorRect(), on: NSScreen.main)
+        } else {
+            voiceHUD.hide()
+            dictationHUD.show(styleName: TranscriptionMode.activePolishModeName ?? dictationStyle.title,
+                               hasLiveTranscript: currentVoiceProvider == .whisper, on: NSScreen.main)
+        }
         return true
     }
 
-    private func handleVoiceKeyUp(translate: Bool = false, correction: Bool = false) {
+    private func handleVoiceKeyUp(correction: Bool = false) {
+        guard let token = dictationSession?.id, dictationSession?.phase == .recording else { return }
         SystemAudioMute.shared.endMute()   // restore speaker as soon as recording stops
 
         // Capture recording duration now — the completion below is async and the
         // start-time property is about to be needed for the next recording.
         let durationMs = recordingStartTime.map { Int(Date().timeIntervalSince($0) * 1000) } ?? 0
+        guard dictationSession?.beginTranscription(token: token, durationMs: durationMs) == true else { return }
         recordingStartTime = nil
-        voiceHUD.setState(.processing("轉錄中…"))
-        voiceService.stopAndTranscribe { [weak self] result in
+        let peak = peakRecordedLevel
+        if correction { voiceHUD.setState(.processing("轉錄中…")) }
+        else { dictationHUD.setStatus("辨識完整錄音中…") }
+        let service = voiceService
+        service.stopAndTranscribeDetailed { [weak self] result in
             DispatchQueue.main.async {
-                guard let self = self else { return }
+                guard let self = self, self.dictationSession?.id == token,
+                      self.dictationSession?.phase == .transcribing else { return }
                 switch result {
                 case .failure(let err):
-                    self.voiceHUD.hide()
-                    var message = "轉錄失敗：\(err.localizedDescription)"
-                    if self.peakRecordedLevel < 0.02 {
-                        message += "\n\n這次錄音從頭到尾幾乎無聲——麥克風可能沒有真正收到音。請從選單列圖示執行「系統診斷…」，或檢查「系統設定 › 聲音 › 輸入」的裝置與音量。"
-                    }
-                    self.showError(message)
-                case .success(let transcript):
+                    self.cancelDictation(token: token)
+                    self.flashHUDMessage(peak < 0.02 ? "麥克風幾乎沒有收到聲音，請檢查輸入裝置" : "轉錄失敗：\(err.localizedDescription)")
+                case .success(let snapshot):
+                    let transcript = snapshot.normalizedText
                     // Phantom-injection guard. A recording that captured no real
                     // audio still comes back "successful" — STT models answer
                     // silence with a short hallucination (a stray letter, 「嗯」,
@@ -592,9 +707,9 @@ final class InputController: NSObject {
                     // "mic captured nothing" threshold the failure path uses
                     // (≈ −49 dBFS; real speech peaks far above it).
                     let spoken = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if spoken.isEmpty || self.peakRecordedLevel < 0.02 {
+                    if spoken.isEmpty || peak < 0.02 {
                         self.debugLog("discarded silent recording (peak \(self.peakRecordedLevel), \(spoken.count) chars) — nothing injected")
-                        self.voiceHUD.hide()
+                        self.cancelDictation(token: token)
                         self.flashHUDMessage("沒有收到聲音")
                         return
                     }
@@ -603,38 +718,42 @@ final class InputController: NSObject {
                     // phrase is indistinguishable from a command, so translation is
                     // shortcut-only now (right-⌘, target language set in Preferences).
                     if correction {
-                        self.runDojoVoiceAdd(transcript)   // 口頭修正 is not usage-tracked
-                    } else if translate {
-                        self.runTranslate(transcript, durationMs: durationMs)
+                        _ = self.dictationSession?.receive(snapshot, token: token)
+                        self.runDojoVoiceAdd(transcript, token: token)
                     } else {
-                        self.runAIPolish(transcript, durationMs: durationMs)
+                        guard self.dictationSession?.receive(snapshot, token: token) == true else { return }
+                        self.saveDictationHistory(status: .notSent)
+                        self.dictationHUD.setText(transcript)
+                        self.runAIPolish(transcript, token: token)
                     }
                 }
             }
         }
     }
 
-    // MARK: - 口頭修正 (voice-added dojo vocabulary, right-Shift PTT)
+    // MARK: - 口頭加詞 (voice-added vocabulary, right-Shift PTT)
 
-    /// Parse the spoken clarification into a dojo entry and park it for the
+    /// Parse the spoken clarification into a vocabulary entry and park it for the
     /// user's Enter/Esc. Nothing is written to the vocabulary until confirmed.
-    private func runDojoVoiceAdd(_ transcript: String) {
+    private func runDojoVoiceAdd(_ transcript: String, token: UUID) {
         guard !APIKeyStore.shared.geminiKey.isEmpty else {
-            voiceHUD.hide()
-            showError("口頭修正需要 Gemini API Key，請在偏好設定（Ctrl+Option+P）填入。")
+            cancelDictation(token: token)
+            showError("口頭加詞需要 Gemini API Key，請在偏好設定（Ctrl+Option+P）填入。")
             return
         }
         voiceHUD.setState(.processing("解析詞條中…"))
         DojoVoiceParser.parse(transcript: transcript) { [weak self] result in
-            guard let self = self else { return }
+            guard let self = self, self.dictationSession?.id == token,
+                  self.dictationSession?.phase == .polishing else { return }
+            self.dictationSession?.cancel(token: token)
             switch result {
             case .failure(let err):
                 self.voiceHUD.hide()
-                self.debugLog("dojo voice-add FAILED: \(err.localizedDescription) (transcript: \(transcript))")
-                self.showError("口頭修正解析失敗：\(err.localizedDescription)")
+                self.debugLog("vocabulary voice-add failed")
+                self.showError("口頭加詞解析失敗：\(err.localizedDescription)")
             case .success(let entry):
                 self.pendingDojoEntry = entry
-                self.debugLog("dojo voice-add parsed: \(entry.wrong) → \(entry.correct)")
+                self.debugLog("vocabulary voice-add parsed: \(entry.wrong) → \(entry.correct)")
                 self.voiceHUD.showDojoConfirm(correct: entry.correct, wrong: entry.wrong)
             }
         }
@@ -652,7 +771,7 @@ final class InputController: NSObject {
             showError("詞庫寫入失敗，請確認磁碟空間或權限。")
             return
         }
-        debugLog("dojo voice-add saved: \(entry.wrong) → \(entry.correct)\(duplicate ? " (duplicate, skipped)" : "")")
+        debugLog("vocabulary voice-add saved: \(entry.wrong) → \(entry.correct)\(duplicate ? " (duplicate, skipped)" : "")")
 
         guard share else {
             voiceHUD.updateDojoConfirmMessage("✅ 已加入詞庫：\(entry.correct)")
@@ -671,7 +790,7 @@ final class InputController: NSObject {
             case .success(.ok):        msg = "已送出待審核 ✓"
             case .success(.duplicate): msg = "這條已有人分享過"
             case .failure(let err):
-                self.debugLog("dojo share submit failed: \(err.localizedDescription)")
+                self.debugLog("vocabulary share submit failed: \(err.localizedDescription)")
                 msg = "分享失敗，詞條已存在本機"
             }
             self.voiceHUD.updateDojoConfirmMessage(msg)
@@ -681,45 +800,313 @@ final class InputController: NSObject {
         }
     }
 
-    /// Translate PTT pipeline: transcript → Gemini translation → inject.
-    /// Unlike polish, a failed translation must NOT inject the original Chinese.
-    /// `lang` overrides the preference (spoken command names its own language).
-    private func runTranslate(_ transcript: String, lang overrideLang: String? = nil,
-                              durationMs: Int = 0) {
+    // MARK: - Translation recording and delivery
+
+    private func startTranslationRecording() -> Bool {
+        guard micReadyOrExplain() else { return false }
+        refreshVoiceServiceForRecording()
+        // Capture before presenting a panel. Language and target never follow a
+        // later foreground app change while this recording is being processed.
+        let app = NSWorkspace.shared.frontmostApplication
+        let language = TranslationPreferences.shared.language(
+            for: app?.bundleIdentifier, fallback: TranscriptionMode.translateTargetLanguage)
+        let session = TranslationSession(appID: app?.bundleIdentifier,
+                                         processID: app?.processIdentifier, language: language)
+        let token = session.id
+        translationSession = session
+        translationSnapshot = nil
+        translationAIText = nil
+        translationAppName = app?.localizedName
+        translationStartedAt = Date()
+        translationHistoryGeneration = TranscriptHistoryStore.shared.generation
         guard !APIKeyStore.shared.geminiKey.isEmpty else {
-            voiceHUD.hide()
-            showError("語音翻譯需要 Gemini API Key，請在偏好設定（Ctrl+Option+P）填入。")
-            return
+            translationFailed("語音翻譯需要 Gemini API Key，請在偏好設定填入。", token: token)
+            return false
         }
-        let lang = overrideLang ?? TranscriptionMode.translateTargetLanguage
-        voiceHUD.setState(.processing("翻譯成\(lang)…"))
-        GeminiPolishService.shared.enhance(
-            text: transcript,
-            mode: .translate(to: lang),
-            onPartial: { [weak self] partial in
-                self?.voiceHUD.setState(.processing(Self.streamingPreview(partial, label: "翻譯中")))
-            }
-        ) { [weak self] result in
+        recordingStartTime = Date()
+        recordingTargetElement = focusedElement()
+        peakRecordedLevel = 0
+        voiceHUD.hide()
+        dictationHUD.hide()
+        translationHUD.onLanguageSelected = { [weak self] language in
+            guard let self = self,
+                  self.translationSession?.selectLanguage(language, token: token) == true else { return }
+            TranslationPreferences.shared.setLanguage(language, for: self.translationSession?.appID)
+            self.finishTranslationRecording(token: token)
+        }
+        translationHUD.onFinish = { [weak self] in self?.finishTranslationRecording(token: token) }
+        translationHUD.onCancel = { [weak self] in self?.cancelTranslation(token: token) }
+        voiceService.onLevelUpdate = { [weak self] level in
             DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.voiceHUD.hide()
+                guard let self = self, self.translationSession?.id == token,
+                      self.translationSession?.phase == .recording else { return }
+                self.peakRecordedLevel = max(self.peakRecordedLevel, level)
+                self.translationHUD.setAudioLevel(level)
+            }
+        }
+        voiceService.onPartialText = { [weak self] partial in
+            DispatchQueue.main.async {
+                guard let self = self, self.translationSession?.id == token,
+                      self.translationSession?.phase == .recording else { return }
+                self.translationHUD.setText(partial)
+                self.translationHUD.setStatus("暫時字幕 · 放開後辨識完整錄音")
+            }
+        }
+        if UserDefaults.standard.bool(forKey: "com.inputsa.muteWhileRecording") {
+            SystemAudioMute.shared.beginMute()
+        }
+        voiceService.startRecording()
+        translationHUD.show(language: language, near: getCursorRect(), on: NSScreen.main)
+        return true
+    }
+
+    /// Called only by physical key release. A chip/finish click leaves shortcut
+    /// ownership intact until this point, so keyUp cannot start a second decode.
+    private func translationShortcutReleased() {
+        guard let token = translationSession?.id else { return }
+        translationSession?.releaseHold(token: token)
+        finishTranslationRecording(token: token)
+        DispatchQueue.main.async { [weak self] in self?.attemptTranslationDelivery() }
+    }
+
+    private func finishTranslationRecording(token: UUID) {
+        let durationMs = recordingStartTime.map { Int(Date().timeIntervalSince($0) * 1000) } ?? 0
+        guard translationSession?.beginTranscription(token: token, durationMs: durationMs) == true else { return }
+        recordingStartTime = nil
+        let peak = peakRecordedLevel
+        SystemAudioMute.shared.endMute()
+        translationHUD.setProcessing(true)
+        translationHUD.setStatus("轉錄中…")
+        let service = voiceService
+        service.stopAndTranscribeDetailed { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self, self.translationSession?.id == token,
+                      self.translationSession?.phase == .transcribing else { return }
                 switch result {
-                case .success(let translated):
-                    self.debugLog("translate OK (\(transcript.count) → \(translated.count) chars)")
-                    // Number formatting is a no-op for most non-CJK output but harmless
-                    // and keeps all injected dictation/translation text on one path.
-                    let out = TranscriptNumberFormatter.format(translated)
-                    self.finishAndInject(out)
-                    UsageStatsStore.shared.record(chars: out.count, durationMs: durationMs)
-                case .failure(let err):
-                    self.debugLog("translate FAILED: \(err.localizedDescription)")
-                    self.showError("翻譯失敗：\(err.localizedDescription)")
+                case .failure(let error):
+                    let message = peak < 0.02
+                        ? "麥克風幾乎沒有收到聲音，請檢查輸入裝置。"
+                        : "轉錄失敗：\(error.localizedDescription)"
+                    self.translationFailed(message, token: token)
+                case .success(let snapshot):
+                    let transcript = snapshot.normalizedText
+                    let spoken = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                    // Keep the same no-audio/phantom-injection guard as dictation.
+                    guard !spoken.isEmpty, peak >= 0.02 else {
+                        self.debugLog("discarded silent translation (peak \(peak), \(spoken.count) chars)")
+                        self.translationFailed("沒有收到聲音", token: token)
+                        return
+                    }
+                    guard self.translationSession?.beginTranslation(token: token) == true else { return }
+                    self.translationSnapshot = snapshot
+                    self.saveTranslationHistory(status: .notSent)
+                    self.translationHUD.setText(spoken)
+                    self.runTranslate(spoken, token: token)
                 }
             }
         }
     }
 
+    /// Cancel only the matching session. Keep any physical hold owned until its
+    /// release; late STT/LLM callbacks cannot update the HUD or insert text.
+    private func cancelTranslation(token: UUID) {
+        guard let session = translationSession, session.id == token, session.isActive else { return }
+        voiceService.cancelRecording()
+        recordingStartTime = nil
+        saveTranslationHistory(status: .cancelled)
+        translationSession?.cancel(token: token)
+        SystemAudioMute.shared.endMute()
+        recordingTargetElement = nil
+        translationHUD.hide()
+    }
+
+    private func translationFailed(_ message: String, token: UUID) {
+        guard translationSession?.id == token, translationSession?.isActive == true else { return }
+        cancelTranslation(token: token)
+        saveTranslationHistory(status: .failed, reason: "翻譯未完成，原稿已保留")
+        // Preserve the failure on the non-activating panel, without entering a
+        // modal alert while the user may still be holding Command or Option.
+        guard let language = translationSession?.language else { return }
+        translationHUD.show(language: language, near: getCursorRect(), on: NSScreen.main)
+        translationHUD.setProcessing(true)
+        translationHUD.setStatus(message)
+        translationHUD.onCancel = { [weak self] in
+            guard self?.translationSession?.id == token else { return }
+            self?.translationHUD.hide()
+        }
+        hideTranslationLater(token: token, after: 6)
+    }
+
+    /// Unlike polish, failed translation never injects the source transcript.
+    private func runTranslate(_ transcript: String, token: UUID) {
+        guard let session = translationSession, session.id == token, session.phase == .translating else { return }
+        guard !APIKeyStore.shared.geminiKey.isEmpty else {
+            translationFailed("語音翻譯需要 Gemini API Key，請在偏好設定填入。", token: token)
+            return
+        }
+        translationHUD.setStatus("翻譯成\(session.language)…")
+        GeminiPolishService.shared.enhance(
+            text: transcript,
+            mode: .translate(to: session.language),
+            onPartial: { [weak self] partial in
+                DispatchQueue.main.async {
+                    guard let self = self, self.translationSession?.id == token,
+                          self.translationSession?.phase == .translating else { return }
+                    self.translationHUD.setText(partial)
+                }
+            }
+        ) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self, self.translationSession?.id == token,
+                      self.translationSession?.phase == .translating else { return }
+                switch result {
+                case .success(let translated):
+                    self.debugLog("translate OK (\(transcript.count) → \(translated.count) chars)")
+                    let out = TranscriptNumberFormatter.format(translated)
+                    self.translationAIText = translated
+                    guard self.translationSession?.finish(text: out, token: token) == true else {
+                        self.translationFailed("翻譯結果為空，沒有輸出文字。", token: token)
+                        return
+                    }
+                    self.translationHUD.setText(out)
+                    self.translationHUD.setStatus("翻譯完成，放開快捷鍵後貼上")
+                    self.attemptTranslationDelivery()
+                case .failure(let err):
+                    self.debugLog("translate FAILED: \(err.localizedDescription)")
+                    self.translationFailed("翻譯失敗：\(err.localizedDescription)", token: token)
+                }
+            }
+        }
+    }
+
+    private func attemptTranslationDelivery() {
+        guard let session = translationSession, session.phase == .ready else { return }
+        let modifiers: NSEvent.ModifierFlags = [.command, .option, .control, .shift, .function]
+        let modifiersReleased = NSEvent.modifierFlags.intersection(modifiers).isEmpty
+        let foregroundPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        guard let delivery = translationSession?.takeDelivery(
+            token: session.id, frontmostPID: foregroundPID, modifiersReleased: modifiersReleased) else { return }
+        if delivery.destination == .originalApp {
+            finishAndInject(delivery.text)
+            translationHUD.setStatus("已送出\(session.language)")
+        } else {
+            // Do not restore an older clipboard over this fallback. A preceding
+            // ordinary paste may still have its 300 ms restore timer pending.
+            clipboardRestoreToken += 1
+            savedClipboardItems = nil
+            recordingTargetElement = nil
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(delivery.text, forType: .string)
+            translationHUD.setStatus("已切換 App：譯文已複製，請自行貼上")
+        }
+        saveTranslationHistory(status: delivery.destination == .originalApp ? .sent : .copied,
+                               finalText: delivery.text)
+        UsageStatsStore.shared.record(chars: delivery.text.count, durationMs: session.durationMs)
+        translationHUD.onCancel = { [weak self] in
+            guard self?.translationSession?.id == session.id else { return }
+            self?.translationHUD.hide()
+        }
+        hideTranslationLater(token: session.id, after: delivery.destination == .originalApp ? 1.5 : 6)
+    }
+
+    private func hideTranslationLater(token: UUID, after delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self = self, self.translationSession?.id == token,
+                  self.translationSession?.isActive == false else { return }
+            self.translationHUD.hide()
+        }
+    }
+
     private func debugLog(_ msg: String) { inputSaLog(msg) }
+
+    private func cancelDictation(token: UUID) {
+        guard dictationSession?.id == token, dictationSession?.isActive == true else { return }
+        dictationSession?.cancel(token: token)
+        voiceService.cancelRecording()
+        voiceService.onPartialText = nil
+        recordingStartTime = nil
+        recordingTargetElement = nil
+        SystemAudioMute.shared.endMute()
+        saveDictationHistory(status: .cancelled)
+        dictationHUD.hide()
+        voiceHUD.hide()
+    }
+
+    private func completeDictation(text: String, aiText: String?, fallbackReason: String? = nil, token: UUID) {
+        guard dictationSession?.finish(text: text, aiText: aiText, fallbackReason: fallbackReason, token: token) == true else {
+            return
+        }
+        dictationHUD.setText(text)
+        dictationHUD.setStatus("整理完成，放開修飾鍵後送出")
+        attemptDictationDelivery()
+    }
+
+    private func attemptDictationDelivery() {
+        guard let session = dictationSession, session.phase == .ready else { return }
+        let modifiers: NSEvent.ModifierFlags = [.command, .option, .control, .shift, .function]
+        guard let delivery = dictationSession?.takeDelivery(
+            token: session.id, frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+            modifiersReleased: NSEvent.modifierFlags.intersection(modifiers).isEmpty) else { return }
+        let copied = delivery.destination == .clipboard
+        if copied { keepInClipboard(delivery.text) }
+        else { finishAndInject(delivery.text) }
+        saveDictationHistory(status: copied ? .copied : .sent, finalText: delivery.text)
+        UsageStatsStore.shared.record(chars: delivery.text.count, durationMs: session.durationMs)
+        // Future prompts get recognition context, never a previous AI invention.
+        if let snapshot = session.snapshot {
+            if priorContextAppID != session.appID { recentUtterances.removeAll() }
+            priorContextAppID = session.appID
+            recordUtterance(snapshot.normalizedText)
+        }
+        let message = copied ? "已切換 App：文字已複製，請自行貼上"
+            : (session.fallbackReason ?? "已送出")
+        dictationHUD.setStatus(message, cancellable: false)
+        dictationHUD.onCancel = { [weak self] in
+            guard self?.dictationSession?.id == session.id else { return }
+            self?.dictationHUD.hide()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (copied || session.fallbackReason != nil ? 6 : 1.5)) { [weak self] in
+            guard let self = self, self.dictationSession?.id == session.id,
+                  self.dictationSession?.isActive == false else { return }
+            self.dictationHUD.hide()
+        }
+    }
+
+    private func keepInClipboard(_ text: String) {
+        clipboardRestoreToken += 1
+        savedClipboardItems = nil
+        recordingTargetElement = nil
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private func saveDictationHistory(status: TranscriptHistoryStore.OutputStatus, finalText: String = "") {
+        guard !dictationIsVocabulary, let session = dictationSession, let snapshot = session.snapshot else { return }
+        persistHistory(.init(id: session.id, date: session.date, rawText: snapshot.rawText,
+                            normalizedText: snapshot.normalizedText, aiText: session.aiText, finalText: finalText,
+                            engine: snapshot.engine, durationMs: session.durationMs,
+                            fallbackReason: session.fallbackReason, status: status,
+                            appName: session.appName, appBundleID: session.appID), generation: dictationHistoryGeneration)
+    }
+
+    private func saveTranslationHistory(status: TranscriptHistoryStore.OutputStatus, finalText: String = "",
+                                        reason: String? = nil) {
+        guard let session = translationSession, let snapshot = translationSnapshot else { return }
+        persistHistory(.init(id: session.id, date: translationStartedAt, rawText: snapshot.rawText,
+                            normalizedText: snapshot.normalizedText, aiText: translationAIText, finalText: finalText,
+                            engine: "\(snapshot.engine) → Gemini（\(session.language)）", durationMs: session.durationMs,
+                            fallbackReason: reason, status: status,
+                            appName: translationAppName, appBundleID: session.appID), generation: translationHistoryGeneration)
+    }
+
+    private func persistHistory(_ entry: TranscriptHistoryStore.Entry, generation: UUID) {
+        // Disk I/O must never hold up the global keyboard event tap.
+        let store = TranscriptHistoryStore.shared
+        historyQueue.async {
+            do { try store.record(entry, ifGeneration: generation) }
+            catch { inputSaLog("history save failed: \(error.localizedDescription)") }
+        }
+    }
 
     /// One switch, two call sites (dictation polish + Option+P): route to the
     /// user's chosen polish provider. Both services share the same
@@ -766,6 +1153,7 @@ final class InputController: NSObject {
     /// Prior context for the polish prompt: each entry capped at 120 chars,
     /// expired ones dropped, joined oldest→newest. `nil` when nothing valid.
     private func priorContextForPolish() -> String? {
+        guard let appID = dictationSession?.appID, priorContextAppID == appID else { return nil }
         let joined = prunedUtterances()
             .map { String($0.text.prefix(120)) }
             .joined(separator: "\n")
@@ -776,62 +1164,56 @@ final class InputController: NSObject {
     /// After polishing (or if the provider can't run), injects text directly into
     /// the target element. No preview step required — text appears immediately;
     /// user can Cmd+Z to undo.
-    private func runAIPolish(_ transcript: String, durationMs: Int = 0) {
+    private func runAIPolish(_ transcript: String, token: UUID) {
+        guard dictationSession?.id == token, dictationSession?.phase == .polishing else { return }
+        if dictationStyle == .verbatim {
+            completeDictation(text: transcript, aiText: nil, token: token)
+            return
+        }
         let provider = APIKeyStore.shared.polishProvider
         // Gemini needs a key; Apple is local and needs none.
         if provider == .gemini, APIKeyStore.shared.geminiKey.isEmpty {
-            debugLog("polish SKIPPED (no Gemini key) — injecting raw transcript (\(transcript.count) chars)")
-            voiceHUD.hide()
-            let formatted = TranscriptNumberFormatter.format(transcript)
-            finishAndInject(formatted)
-            UsageStatsStore.shared.record(chars: formatted.count, durationMs: durationMs)
-            recordUtterance(formatted)   // prior-context buffer: raw transcript on fallback
+            completeDictation(text: transcript, aiText: nil,
+                              fallbackReason: "未設定 Gemini，已保留辨識原文", token: token)
             return
         }
         let providerTag = provider == .apple ? "Apple" : "Gemini"
         let baseLabel = provider == .apple ? "AI 潤飾中（本地）" : "AI 潤飾中"
-        let modeName = TranscriptionMode.activePolishModeName
-        voiceHUD.setState(.processing(modeName.map { "\(baseLabel)（\($0)）…" } ?? "\(baseLabel)…"))
-        debugLog("polish in (\(providerTag)): \(String(transcript.prefix(120)))")
+        dictationHUD.setStatus("\(baseLabel) · \(dictationStyle.title)")
+        debugLog("polish started (\(providerTag), \(transcript.count) chars)")
         dispatchPolish(
             text: transcript,
-            mode: TranscriptionMode.activePolishMode,
+            mode: dictationMode,
             // Prior context is Gemini-only (Apple 3B hallucination risk); compute
             // before this utterance is recorded so it never sees itself.
             priorContext: provider == .apple ? nil : priorContextForPolish(),
             onPartial: { [weak self] partial in
-                self?.voiceHUD.setState(.processing(Self.streamingPreview(partial, label: "潤飾中")))
+                DispatchQueue.main.async {
+                    guard let self = self, self.dictationSession?.id == token,
+                          self.dictationSession?.phase == .polishing else { return }
+                    self.dictationHUD.setText(partial)
+                }
             }
         ) { [weak self] result in
             DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.voiceHUD.hide()
+                guard let self = self, self.dictationSession?.id == token,
+                      self.dictationSession?.phase == .polishing else { return }
                 switch result {
                 case .success(let polished):
-                    // Post-polish safety net: re-run the dojo correction table so terms
-                    // the LLM missed or "normalized away" (發願→發愿 etc.) are restored,
-                    // then the deterministic number formatter (百分之三十五→35% etc.) as a
-                    // belt-and-suspenders backstop to the prompt's number rules.
-                    let dojoMode = UserDefaults.standard.bool(forKey: "com.inputsa.dojoMode")
-                    let corrected = DojoCorrectionTable.shared.correct(polished, dojoMode: dojoMode)
-                    let final = TranscriptNumberFormatter.format(corrected)
+                    // Vocabulary is AI reference context only; no global term replacement.
+                    // Keep the deterministic number formatter after polishing.
+                    let final = TranscriptNumberFormatter.format(polished)
                     let newlines = final.filter { $0 == "\n" }.count
                     self.debugLog("polish OK (\(transcript.count) → \(final.count) chars, \(newlines) newlines)")
-                    self.debugLog("polish out: \(String(final.prefix(120)))")
-                    self.finishAndInject(final)
-                    UsageStatsStore.shared.record(chars: final.count, durationMs: durationMs)
-                    self.recordUtterance(final)   // prior-context buffer: polished text
+                    self.completeDictation(text: final, aiText: polished, token: token)
                 case .failure(let err):
                     // Fall back to the raw transcript, but tell the user polish didn't run —
                     // silent fallback made key/network failures look like a formatting bug.
                     // The deterministic number pass still applies (it's the whole reason it
                     // exists as a rules layer: it must protect the raw-transcript fallback too).
                     self.debugLog("polish FAILED: \(err.localizedDescription) — injecting raw transcript")
-                    let fallback = TranscriptNumberFormatter.format(transcript)
-                    self.finishAndInject(fallback)
-                    UsageStatsStore.shared.record(chars: fallback.count, durationMs: durationMs)
-                    self.recordUtterance(fallback)   // prior-context buffer: raw transcript on fallback
-                    self.notifyPolishFailure(err.localizedDescription)
+                    self.completeDictation(text: transcript, aiText: nil,
+                                           fallbackReason: "AI 整理失敗，已保留辨識原文", token: token)
                 }
             }
         }
@@ -843,14 +1225,6 @@ final class InputController: NSObject {
         let flat = partial.replacingOccurrences(of: "\n", with: " ")
         let tail = String(flat.suffix(16))
         return "\(label)…\(tail)"
-    }
-
-    /// Non-blocking notice when polish/translation quietly degrades (e.g. bad API key).
-    private func notifyPolishFailure(_ reason: String) {
-        let note = NSUserNotification()
-        note.title = "AI 潤飾未生效（已輸出原文）"
-        note.informativeText = reason
-        NSUserNotificationCenter.default.deliver(note)
     }
 
     /// Inject the final text and play a subtle confirmation sound.
@@ -865,6 +1239,8 @@ final class InputController: NSObject {
     /// not interrupt an ongoing dictation/translation/correction/QA session.
     var isAnyRecordingActive: Bool {
         activeModifierHoldAction != nil || activeKeyHoldAction != nil || qaKeyRecording
+            || translationSession?.isActive == true
+            || dictationSession?.isActive == true
     }
 
     /// Brief non-blocking HUD toast (e.g. "沒有選取文字"), auto-hidden after 1.2 s.
@@ -895,11 +1271,9 @@ final class InputController: NSObject {
                 guard let self = self else { return }
                 switch result {
                 case .success(let enhanced):
-                    // Match the dictation pipeline's post-pass so 道場詞彙 and
-                    // number formatting survive in manual polish too, then preview.
-                    let dojoMode = UserDefaults.standard.bool(forKey: "com.inputsa.dojoMode")
-                    let corrected = DojoCorrectionTable.shared.correct(enhanced, dojoMode: dojoMode)
-                    let final = TranscriptNumberFormatter.format(corrected)
+                    // Match dictation's number formatting, then preview without
+                    // replacing terms from the reference vocabulary.
+                    let final = TranscriptNumberFormatter.format(enhanced)
                     self.polishPreview.startPreview(original: text, enhanced: final)
                     self.showPolishHUD(final)
                 case .failure(let err):
@@ -991,6 +1365,7 @@ final class InputController: NSObject {
 
         pb.clearContents()
         pb.setString(text, forType: .string)
+        let injectedChangeCount = pb.changeCount
         pasteViaCmdV()
         NSLog("[InputSa] injectText: pasted via Cmd+V (\(text.count) chars)")
 
@@ -1001,6 +1376,7 @@ final class InputController: NSObject {
             guard let self = self, token == self.clipboardRestoreToken else { return }
             let items = self.savedClipboardItems
             self.savedClipboardItems = nil
+            guard NSPasteboard.general.changeCount == injectedChangeCount else { return }
             Self.restorePasteboard(items, to: NSPasteboard.general)
         }
     }
@@ -1093,7 +1469,7 @@ final class InputController: NSObject {
 // MARK: - Shared diagnostic logger
 /// Append a diagnostic line to ~/Library/Logs/InputSa.log (unified log has proven
 /// unreliable for post-hoc inspection of this app — a plain file survives and is
-/// greppable). Local file only; traces the transcription → correction → polish
+/// greppable). Local file only; traces the transcription → polish
 /// pipeline so accuracy issues can be diagnosed from real usage.
 func inputSaLog(_ msg: String) {
     NSLog("[InputSa] %@", msg)

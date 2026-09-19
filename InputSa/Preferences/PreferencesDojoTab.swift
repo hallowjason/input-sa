@@ -1,25 +1,12 @@
 import AppKit
 
-/// 道場詞庫 pane — dojo-mode switch, the vocabulary list with add / voice-add
-/// footer actions, and share status. Same controls and data flow as always;
-/// the 2026-07-16 v3 redesign moves the list into a grouped card (text-first
-/// rows, monochrome badges) with card-footer text actions.
+/// General vocabulary pane. Numbered entries are spelling references for AI,
+/// with no domain switch or automatic homophone replacement. Legacy property
+/// names keep the existing storage and community integration compatible.
 extension PreferencesWindowController {
 
     func makeDojoContent() -> NSView {
-        // ── Card 1: 道場模式 switch ───────────────────────────
-        dojoModeSwitch = NSSwitch()
-        dojoModeSwitch.state = PreferencesWindowController.dojoMode ? .on : .off
-        dojoModeSwitch.target = self
-        dojoModeSwitch.action = #selector(dojoModeChanged)
-
-        let modeCard = DesignTokens.groupCard([
-            DesignTokens.row(title: "道場模式",
-                             subtitle: "關閉時「限道場」詞條不生效，避免誤糾一般口語",
-                             control: dojoModeSwitch),
-        ])
-
-        // ── Card 2: 詞條 list + footer actions ────────────────
+        // ── Numbered vocabulary list + footer actions ──────
         dojoCardList = CardListView(maxHeight: 240)   // 5 rows, then scroll
         dojoCardList.emptyStateText = "尚無詞條 — 點下方「新增詞條」建立"
         dojoCardList.onEdit = { [weak self] idx in self?.editDojoEntry(at: idx) }
@@ -46,9 +33,9 @@ extension PreferencesWindowController {
         let listCard = DesignTokens.groupCard([dojoCardList, footer])
 
         let hintLabel = DesignTokens.caption(
-            "語音轉錄常聽錯的道場專有名詞在此糾正。「一律套用」永遠生效；「限道場」只在道場模式" +
-            "開啟時生效。「同音」會比對所有同音變體（妙吉／妙急大帝 → 妙極大帝）。" +
-            "「共編」為道友共享的詞條（唯讀），要覆蓋就自己新增同一個誤辨的詞條。")
+            "人名、專有名詞與常用字詞統一放在這裡，不用切換模式。AI 整理時會參考詞庫，" +
+            "不再用同音規則強制替換；未使用 AI 時保留辨識文字。詞多時優先參考與本句相關的詞。" +
+            "「共編」是其他使用者分享的詞條（唯讀）。")
 
         // Transient, non-blocking share feedback (kept empty/hidden until a submit
         // resolves) — deliberately not an NSAlert, so a failed share never
@@ -59,7 +46,6 @@ extension PreferencesWindowController {
 
         // ── Assemble ─────────────────────────────────────────
         let stack = NSStackView(views: [
-            DesignTokens.group(card: modeCard),
             dojoShareStatusLabel,
             DesignTokens.group(title: "詞條", card: listCard, footnote: hintLabel),
         ])
@@ -82,39 +68,35 @@ extension PreferencesWindowController {
         // appended after as read-only rows — they never fire the edit/delete
         // callbacks, so the personal index mapping stays intact.
         dojoEntries = DojoCorrectionTable.shared.personalEntries
-        var rows = dojoEntries.map { dojoRow(for: $0, shared: false) }
-        rows += DojoCorrectionTable.shared.sharedEntries.map { dojoRow(for: $0, shared: true) }
+        var rows = dojoEntries.enumerated().map {
+            dojoRow(for: $0.element, number: $0.offset + 1, shared: false)
+        }
+        rows += DojoCorrectionTable.shared.sharedEntries.enumerated().map {
+            dojoRow(for: $0.element, number: dojoEntries.count + $0.offset + 1, shared: true)
+        }
         dojoCardList?.reload(rows: rows)
         dojoCountLabel?.stringValue = "\(rows.count) 詞條"
     }
 
-    /// One list row for a dojo entry. `shared` marks it as a community entry:
-    /// adds a 「共編」 badge and makes the row read-only (no 編輯／刪除).
-    /// Monochrome badge hierarchy: always-on tier = filled ink, dojo-only =
-    /// soft well, phonetic = soft well, community = hairline outline.
-    private func dojoRow(for e: DojoCorrectionTable.Entry, shared: Bool) -> CardListView.Row {
-        let isAlways = e.tier != "dojoOnly"
-        let title = NSAttributedString(string: e.correct, attributes: [
+    /// Numbers reflect the displayed order, not persistent IDs. Community rows
+    /// remain read-only; personal row indexes still map directly to edit/delete.
+    private func dojoRow(for e: DojoCorrectionTable.Entry, number: Int,
+                         shared: Bool) -> CardListView.Row {
+        let title = NSAttributedString(string: String(format: "%03d", number) + "  " + e.correct, attributes: [
             .font: DesignTokens.uiFont(13, weight: .semibold),
             .kern: -0.2,
             .foregroundColor: DesignTokens.Palette.ink,
         ])
-        var subtitle = e.wrong != e.correct ? "常見誤辨：\(e.wrong)" : "同音變體比對"
-        if shared { subtitle += " · 道友分享" }
-        var badges: [(text: String, style: DesignTokens.BadgeStyle)] = [
-            isAlways ? ("一律套用", .filled) : ("限道場", .soft)
-        ]
-        if e.phonetic { badges.append(("同音", .soft)) }
-        if shared { badges.append(("共編", .outline)) }
+        var subtitle = !e.wrong.isEmpty && e.wrong != e.correct
+            ? "誤辨備註：\(e.wrong)" : "常用拼寫參考"
+        if shared { subtitle += " · 社群分享" }
+        let badges: [(text: String, style: DesignTokens.BadgeStyle)] =
+            shared ? [("共編", .outline)] : []
         return CardListView.Row(
             title: title,
             subtitle: subtitle,
             badges: badges,
             isReadOnly: shared)
-    }
-
-    @objc private func dojoModeChanged() {
-        PreferencesWindowController.dojoMode = (dojoModeSwitch.state == .on)
     }
 
     // MARK: - 口頭修正 (voice-add from Preferences)
@@ -141,7 +123,7 @@ extension PreferencesWindowController {
                                 self.showAlert("解析失敗", info: err.localizedDescription)
                             case .success(let entry):
                                 guard let window = self.window else { return }
-                                DojoEntrySheet.present(on: window, title: "確認口頭修正詞條",
+                                DojoEntrySheet.present(on: window, title: "確認新增字詞",
                                                        initial: entry) { [weak self] confirmed, share in
                                     guard let self, let confirmed else { return }
                                     var updated = self.dojoEntries
@@ -156,7 +138,7 @@ extension PreferencesWindowController {
             }
         } else {
             guard !APIKeyStore.shared.geminiKey.isEmpty else {
-                showAlert("需要 Gemini API Key", info: "口頭修正靠 Gemini 解析你說的釋義，請先在「語音服務」分頁填入。")
+                showAlert("需要 Gemini API Key", info: "口頭加詞靠 Gemini 解析你說的釋義，請先在「語音服務」分頁填入。")
                 return
             }
             let service: VoiceServiceProtocol
@@ -164,6 +146,7 @@ extension PreferencesWindowController {
             case .groq:   service = GroqVoiceService()
             case .google: service = GoogleVoiceService()
             case .sherpa: service = SherpaVoiceService()
+            case .whisper: service = WhisperVoiceService()
             }
             voiceAddService = service
             service.startRecording()
@@ -178,7 +161,7 @@ extension PreferencesWindowController {
 
     @objc private func addDojoEntry() {
         guard let window else { return }
-        DojoEntrySheet.present(on: window, title: "新增道場詞條", initial: nil) { [weak self] entry, share in
+        DojoEntrySheet.present(on: window, title: "新增字詞", initial: nil) { [weak self] entry, share in
             guard let self, let entry else { return }
             var updated = self.dojoEntries
             updated.append(entry)
@@ -189,7 +172,7 @@ extension PreferencesWindowController {
 
     private func editDojoEntry(at index: Int) {
         guard let window, index < dojoEntries.count else { return }
-        DojoEntrySheet.present(on: window, title: "編輯道場詞條",
+        DojoEntrySheet.present(on: window, title: "編輯字詞",
                                initial: dojoEntries[index]) { [weak self] entry, share in
             guard let self, let entry else { return }
             var updated = self.dojoEntries

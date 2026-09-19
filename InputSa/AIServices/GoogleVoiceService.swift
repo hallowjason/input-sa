@@ -75,6 +75,10 @@ final class GoogleVoiceService: NSObject, VoiceServiceProtocol {
     }
 
     func stopAndTranscribe(completion: @escaping (Result<String, Error>) -> Void) {
+        stopAndTranscribeDetailed { completion($0.map(\.normalizedText)) }
+    }
+
+    func stopAndTranscribeDetailed(completion: @escaping (Result<VoiceTranscriptionSnapshot, Error>) -> Void) {
         levelMeter.stop()
         guard !micPermissionDenied else {
             completion(.failure(Err("麥克風權限未授權。請至「系統設定 › 隱私與安全性 › 麥克風」開啟 Input-sa 存取權限。")))
@@ -111,7 +115,7 @@ final class GoogleVoiceService: NSObject, VoiceServiceProtocol {
 
     // MARK: - Google Cloud STT V1
 
-    private func transcribeWithGoogle(audioURL: URL, completion: @escaping (Result<String, Error>) -> Void) {
+    private func transcribeWithGoogle(audioURL: URL, completion: @escaping (Result<VoiceTranscriptionSnapshot, Error>) -> Void) {
         let apiKey = APIKeyStore.shared.googleSttKey
         guard !apiKey.isEmpty else {
             try? FileManager.default.removeItem(at: audioURL)
@@ -176,7 +180,10 @@ final class GoogleVoiceService: NSObject, VoiceServiceProtocol {
                     DispatchQueue.main.async { completion(.failure(Err("轉錄結果為空，請重試"))) }
                     return
                 }
-                DispatchQueue.main.async { completion(.success(text)) }
+                DispatchQueue.main.async {
+                    completion(.success(VoiceTranscriptionSnapshot(rawText: text, normalizedText: text,
+                                                                   engine: "google-stt-latest-long")))
+                }
             } catch {
                 // Surface the API error message when available.
                 if let errJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
