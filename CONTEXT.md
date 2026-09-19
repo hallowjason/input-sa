@@ -1,29 +1,30 @@
-# Session Context — 2026-09-19 v3.1.1 安裝前修正
+# Session Context — 2026-09-19 v3.1.1 已發布、安裝與減量
 
 ## 上次完成
-- v3.0.0 已安裝並發布，歷史紀錄保留於下方。
-- 使用者要求整套偏好設定跟進 Talky 風格、中英辨識改善，並明確同意新增可自行選擇的 Codex／Claude 文字整理。
-- 新增有限詞庫／Codex、Claude 拼寫提示，不做 cloud/code 同音全域替換；SenseVoice 不支援聲學提示，不能宣稱準確率已提升。
-- Gemini 三句合成測試通過：保留英文原詞，明確語境可還原音譯。Whisper TTS A/B 未穩定恢復英文名稱。
-- Codex／Claude 最終真實固定句連線均通過（約 5.42／3.83 秒），不使用私人詞庫或口述。乾淨環境必須保留 USER/LOGNAME 才能找到既有 Claude Keychain 登入。
-- Codex 0.154.0 官方模型目錄與停用工具設定已用 localhost 假 provider 驗證 tools=[]；CLI 均限個人未受管理環境，具有取消、逾時及退出程序排空。
+- 使用者授權的 Talky 風格偏好設定、中英專名提示、可選 Codex／Claude 文字整理已完成；功能提交 407392b，退出修正提交 5b73875。
+- 使用者指出的長文字截斷、語音／AI 分頁圖示、一般分頁圖示、觀音選單內距及快捷鍵對齊均修正。五分頁 × 三尺寸 × 淺深色共 30 組檢查通過，另有原生長文字、選單與取消操作驗證。
+- v3.1.1/build 12 已安裝到 `~/Applications/Input-sa.app`；SIGTERM 正常退出約 0.09 秒，重啟後 event tap 啟用。原服務選擇、字詞庫及本地模型比對保留，固定簽章 DR 不變。
+- [v3.1.1 Release](https://github.com/hallowjason/input-sa/releases/tag/v3.1.1) 已公開，tag 指向 5b7387588106dd3b6f1cdf01479c3baa4775f06c；ZIP 16,338,284 bytes，GitHub 與本機 SHA-256 均為 `317208f1dd098d98f38ab3cedbbe66b3e287a9d31fbf1ab792c144bb74d9881c`。v3.1.0 原附件保留，說明加修正版連結。
+- 舊 v3.0.0 已進入退出死結，確認 tap 停用／worker idle 後僅結束核對過路徑的該 PID。備份：`~/Applications/.inputsa-backups/20260919T123724Z-26913/Input-sa.app`。
+- 工作路徑 3,390,400 KiB → 575,684 KiB（約 3.23 GiB → 562 MiB），減少 83%。刪可再生 build 及 10 份逐一驗證 GitHub 同名／大小／SHA-256 的旧 ZIP、2 份 checksum；保留新版包、design-refs、SenseVoice、獨有 Paraformer 備份。模型工具直接重用 AppSupport，避免再存約 1.6 GB。
+- 13 套隔離測試、364 項檢查、完整 macOS build、獨立程式審查通過；清理後 13 套測試再次通過。獨立 AppKit 終止測試重現舊行為逾時，RunLoop 修正版約 0.35 秒退出。
+- Codex／Claude 真實內建固定句分別約 5.42／3.83 秒通過，未使用私人詞庫或口述。Gemini 三句合成測試通過；Whisper TTS A/B 未穩定恢復英文名稱。
 
 ## 待辦 / 未完成
-- 使用者指出的長文字截斷、分頁圖示偏位、角色選單內距、快捷鍵對齊均已修正，30 組尺寸／淺深色檢查及原生長文字、選單／取消操作通過。
-- 13 套隔離測試、364 項檢查、最終獨立審查與完整 macOS build 通過。
-- 使用者追加工作路徑減量要求：3.2 GB 多為 build 產物；已確認 Whisper 開發副本與正式安裝模型相同。發布／安裝後清可再生 build 與已有發布附件的 ZIP，保留獨有 Paraformer 備份及原始模型。
-- v3.1.0/build 11 已提交 407392b、推送並公開發布；安裝器偵測舊版 SIGTERM 退出死結而保留舊安裝。
-- 正修復 AppDelegate 在 main dispatch callback 內 terminate 的巢狀 run loop 死結，改由 RunLoop.main.perform 呼叫；獨立 fixture 舊版逾時、新版 0.35 秒正常退出。另發 v3.1.1/build 12，不覆寫已發布版本。
-- 站立授權已包含完整翻修／上線／安裝，工作目錄清理待安裝完成。
+- 這次已授權的實作、安裝、發布、工作資料夾減量皆完成。
+- 使用者真實口音／麥克風／跨 App 輸入品質仍需本人使用回饋，不能以合成錄音宣稱個人辨識準確率提高。
 
 ## 重要決策與限制
-- 既有 voiceProvider=sherpa、polishProvider=gemini 保持不變。CLI 只接文字整理，翻譯/劃詞問答/口頭加詞仍 Gemini。
-- 不重設 TCC、不換固定簽章；不動原有 untracked design-refs/。
-- tasks/todo.md、tasks/release-v3.1.0.md 與 tasks/lessons.md 保存本次進度；stop hook 可能再次覆蓋此檔，提交前務必保留歷史。
+- 保持原 voiceProvider=sherpa、polishProvider=gemini。CLI 可在「進階 → 語音服務」自行選擇；翻譯／劃詞問答／口頭加詞仍使用 Gemini。
+- Codex 驗證版 0.154.0、模型 gpt-5.5；兩家 CLI 均限個人未受管理環境，停用工具及 MCP，具取消、逾時與 owned process 回收。Claude 乾淨環境保留 USER/LOGNAME 才能使用既有 Keychain 登入。
+- SenseVoice 目前解碼不支援詞庫提示；Whisper/Groq/Google 有有限完整詞項提示，不加全域同音替換。
+- 不重設 TCC，不換固定簽章，不動原 untracked design-refs/。本機正式 App 的無視窗狀態 CUA 仍會逾時；UI 由隔離原生預覽驗證，正式安裝另驗版本、簽章、程序／event tap、退出及資料保留。
+- 清理報告位於 `/private/tmp/inputsa-cleanup-audit.json`、`/private/tmp/inputsa-cleanup-result.json`，release 校驗位於 `/private/tmp/inputsa-release-v3.1.1-verified.json`。必要開發輸入仍在 InputSa/vendor，可重新建置；不新增常駐服務或 UI 框架。
+- 詳見 tasks/todo.md、tasks/release-v3.1.0.md、tasks/release-v3.1.1.md、tasks/lessons.md。Stop hook 可能覆寫本檔，提交前務必保留歷史。
 
 ## 下次繼續
 cd /Users/gooo/Desktop/.claude/projects/input-sa
-# 先看最新工作樹與本段，完成 v3.1.1 編譯／審查、安裝退出驗證、發布與工作資料夾減量。
+# 以 v3.1.1 已安裝／發布狀態接續使用者回饋，避免重新執行已完成的發布與清理。
 
 ---
 

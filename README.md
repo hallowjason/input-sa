@@ -76,6 +76,8 @@ cd input-sa
 
 日常編譯直接使用 `vendor/whisper/` 的現成引擎，不必重抓 CMake 或重編 whisper.cpp。模型工具預設重用 App 的 `~/Library/Application Support/InputSa/models/`，經相同 SHA-256 驗證後直接使用；需要隔離測試時仍可明確傳入另一個目錄。`build/` 是可重建的輸出與開發暫存；已完成安裝與發布後可清除，原始碼、`vendor/` 的引擎／函式庫與 `InputSa/Resources/model/` 的本地模型要保留。
 
+工作目錄只需保留最新版封裝。舊 ZIP 與 checksum 在確認 GitHub 同版附件的檔名、大小、SHA-256 全部一致後才清除；`vendor/models-backup/` 或個人素材若沒有其他可靠副本，繼續保留。App 的模型、詞庫與紀錄位於使用者資料目錄，不列入建置暫存清理。
+
 `create-signing-cert.sh` 會建立一張**永久（約 10 年）的自簽程式簽章憑證**，之後 `./install.sh` 與 `./package-release.sh` 都會自動用它。用同一張固定憑證簽章，是讓「升級後麥克風授權不失效」成立的關鍵——ad-hoc 簽章每次重編都會變，授權就會對不上（詳見該腳本開頭註解）。第一次用它簽章時，系統可能跳「codesign 想使用鑰匙圈金鑰」，按【總是允許】一次即可。
 
 之後更新可 `git pull` 再跑 `bash install.sh`。安裝會驗證新版符合舊版簽章身分，備份於 `~/Applications/.inputsa-backups/`；缺少原簽章身分時停止，不默默改成 ad-hoc。發布執行 `bash package-release.sh`，使用獨立的 `build/release/`，產生含 Whisper runtime 的 zip 與 SHA-256 檔；不移動原始模型、不覆蓋本機完整建置。
