@@ -47,15 +47,17 @@ final class DojoEntrySheet: NSObject {
         correctField.stringValue = initial?.correct ?? ""
         correctField.font = DesignTokens.monoFont(13)
 
-        wrongField.placeholderString = "選填——記下曾經辨識錯的寫法"
+        wrongField.placeholderString = "曾經辨識錯的寫法（選填）"
         wrongField.stringValue = initial.map { $0.wrong == $0.correct ? "" : $0.wrong } ?? ""
         wrongField.font = DesignTokens.monoFont(13)
 
         // Share opt-in — default OFF so personal preference terms aren't pushed to
         // the community pool unless the user deliberately chooses to.
         shareSwitch.state = .off
-        let shareLabel = NSTextField(labelWithString: "同時分享到共編詞庫（送審後供其他人參考）")
+        let shareLabel = WrappingTextField("同時分享到共編詞庫（送審後供其他人參考）")
         shareLabel.font = DesignTokens.monoFont(11)
+        shareLabel.preferredMaxLayoutWidth = DesignTokens.Grid.fieldColumnWidth - 48
+        shareSwitch.setContentCompressionResistancePriority(.required, for: .horizontal)
         let shareRow = NSStackView(views: [shareSwitch, shareLabel])
         shareRow.orientation = .horizontal
         shareRow.spacing = DesignTokens.Spacing.compact
@@ -152,10 +154,12 @@ final class PromptEntrySheet: NSObject {
         let promptScroll = NSScrollView()
         promptScroll.documentView = promptTextView
         promptScroll.hasVerticalScroller = true
+        promptScroll.autohidesScrollers = false
+        promptScroll.scrollerStyle = .legacy
         promptScroll.borderType = .lineBorder
         promptScroll.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            promptScroll.heightAnchor.constraint(equalToConstant: 88),
+            promptScroll.heightAnchor.constraint(equalToConstant: 132),
             promptScroll.widthAnchor.constraint(equalToConstant: DesignTokens.Grid.fieldColumnWidth),
         ])
         // NSTextView inside NSScrollView needs its own width management or long
@@ -209,13 +213,13 @@ private enum SheetChrome {
                         saveTarget: AnyObject, saveAction: Selector,
                         cancelTarget: AnyObject, cancelAction: Selector) {
         let titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = DesignTokens.uiFont(15, weight: .heavy)
+        titleLabel.font = DesignTokens.uiFont(18, weight: .semibold)
+        titleLabel.textColor = DesignTokens.Palette.ink
+        sheet.backgroundColor = DesignTokens.Palette.canvas
 
         let saveBtn = DesignTokens.inkButton(title: "儲存", target: saveTarget, action: saveAction)
         saveBtn.keyEquivalent = "\r"
-        let cancelBtn = NSButton(title: "取消", target: cancelTarget, action: cancelAction)
-        cancelBtn.bezelStyle = .rounded
-        cancelBtn.font = DesignTokens.uiFont(12)
+        let cancelBtn = DesignTokens.pushButton(title: "取消", target: cancelTarget, action: cancelAction)
         cancelBtn.keyEquivalent = "\u{1b}"
         let buttonRow = NSStackView(views: [NSView(), cancelBtn, saveBtn])
         buttonRow.orientation = .horizontal
@@ -225,7 +229,7 @@ private enum SheetChrome {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = DesignTokens.Spacing.card
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
+        stack.edgeInsets = NSEdgeInsets(top: 24, left: 24, bottom: 24, right: 24)
         buttonRow.translatesAutoresizingMaskIntoConstraints = false
         // Right-align the button row with the content's trailing edge.
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -237,7 +241,7 @@ private enum SheetChrome {
             stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            buttonRow.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
+            buttonRow.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -48),
         ])
         sheet.setContentSize(stack.fittingSize)
     }

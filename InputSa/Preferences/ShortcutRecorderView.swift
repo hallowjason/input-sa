@@ -113,19 +113,17 @@ final class ShortcutRecorderView: NSView {
     /// paints (layer draws regardless), but there is no hit-testable area, so real mouse
     /// clicks land on whatever is behind it instead of triggering `mouseDown`.
     override var intrinsicContentSize: NSSize {
-        NSSize(width: 140, height: 28)
+        NSSize(width: 140, height: 32)
     }
 
     private func setupUI() {
         wantsLayer = true
-        layer?.cornerRadius = 6
+        layer?.cornerRadius = 14
         layer?.borderWidth = 1
-        layer?.borderColor = NSColor(white: 0.8, alpha: 1).cgColor
-        layer?.backgroundColor = NSColor.white.cgColor
 
         label.alignment = .center
         label.font = NSFont.systemFont(ofSize: 13)
-        label.textColor = NSColor(white: 0.3, alpha: 1)
+        label.textColor = DesignTokens.Palette.ink
         addSubview(label)
         label.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -139,17 +137,23 @@ final class ShortcutRecorderView: NSView {
     private func updateDisplay() {
         if isRecording {
             label.stringValue = "按下快捷鍵..."
-            label.textColor = NSColor.systemBlue
-            layer?.borderColor = NSColor.systemBlue.cgColor
+            label.textColor = DesignTokens.Palette.accent
         } else if let sc = shortcut {
             label.stringValue = sc.displayString
-            label.textColor = NSColor(white: 0.2, alpha: 1)
-            layer?.borderColor = NSColor(white: 0.8, alpha: 1).cgColor
+            label.textColor = DesignTokens.Palette.ink
         } else {
             label.stringValue = "點擊設定"
-            label.textColor = NSColor(white: 0.6, alpha: 1)
-            layer?.borderColor = NSColor(white: 0.8, alpha: 1).cgColor
+            label.textColor = DesignTokens.Palette.inkMuted(0.68)
         }
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = DesignTokens.Palette.pressed.cgColor
+            layer?.borderColor = (isRecording ? DesignTokens.Palette.accent : DesignTokens.Palette.sep).cgColor
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateDisplay()
     }
 
     override func mouseDown(with event: NSEvent) {

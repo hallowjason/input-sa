@@ -189,7 +189,9 @@ final class WhisperRuntime {
         field("response_format", "json")
         field("language", "auto")
         field("temperature", "0")
-        field("prompt", String(prompt.prefix(120)))
+        // Production prompts are whole-term, <=224 UTF-8 bytes. Do not cut a
+        // valid prompt at the old 120-character boundary and split a name.
+        field("prompt", String(prompt.prefix(224)))
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"recording.wav\"\r\nContent-Type: audio/wav\r\n\r\n".utf8))
         body.append(wav); body.append(Data("\r\n--\(boundary)--\r\n".utf8))
         var urlRequest = URLRequest(url: base.appendingPathComponent("inference"), timeoutInterval: timeout)

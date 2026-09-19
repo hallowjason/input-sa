@@ -93,8 +93,8 @@ final class WhisperVoiceService: VoiceServiceProtocol {
     }
 
     private func prompt() -> String {
-        let terms = DojoCorrectionTable.shared.preferredTerms(for: "", maxTerms: 20, maxCharacters: 90)
-        return terms.isEmpty ? "" : terms.joined(separator: "、")
+        let terms = DojoCorrectionTable.shared.preferredTerms(for: "", maxTerms: 40, maxCharacters: 800)
+        return SpeechRecognitionHints.whisperPrompt(vocabulary: terms)
     }
 
     private func stopTimers() {

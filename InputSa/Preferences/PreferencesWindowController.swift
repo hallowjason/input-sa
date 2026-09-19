@@ -1,11 +1,7 @@
 import AppKit
 
-/// Preferences window, System Settings register (2026-07-16 redesign v3):
-/// a translucent sidebar with four nav items on the left, and one scrolling
-/// content pane per item on the right — grouped white-card rows on a neutral
-/// canvas. The four `make…Content()` builders (one per tab file) return the
-/// exact same control trees as before; only the container language changed.
-/// No control, target/action, or data flow was altered.
+/// Single-column settings with general/advanced capsule navigation. Existing
+/// controls and persistence remain in the tab builders; the header only routes.
 ///
 /// The builders live in sibling files (PreferencesVoiceServiceTab / …Shortcuts /
 /// …Modes / …Dojo). Stored state stays here because Swift extensions can't add
@@ -45,6 +41,17 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
     var polishStatusDot: StatusDotView!
     var muteWhileRecordingSwitch: NSSwitch!
     var cleanupStylePicker: NSPopUpButton!
+    var voiceProviderChoices: SoftChoiceGrid!
+    var polishProviderChoices: SoftChoiceGrid!
+    var cleanupStyleChoices: SoftSegmentedPicker!
+    var cliConfigurationSection: NSView!
+    var cliConnectionLabel: NSTextField!
+    var cliConnectionTestButton: NSButton!
+    var cliConnectionCancelButton: NSButton!
+    var cliTestingProvider: APIKeyStore.PolishProvider?
+    private var cliConnectionRequest: CLITextRequest?
+    private var cliConnectionToken: UUID?
+    static let polishProviders: [APIKeyStore.PolishProvider] = [.gemini, .apple, .codex, .claude]
     // Shortcuts pane — one recorder per action (all seven are user-rebindable)
     var shortcutRecorders: [ShortcutAction: ShortcutRecorderView] = [:]
     var translatePopUp: NSPopUpButton!
@@ -71,19 +78,22 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
     var dashboardChart: UsageBarChartView?
 
     private init() {
+        let visibleFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1024, height: 900)
+        let initialSize = NSSize(width: min(DesignTokens.windowSize.width, visibleFrame.width - 40),
+                                 height: min(DesignTokens.windowSize.height, visibleFrame.height - 60))
         let win = NSWindow(
-            contentRect: NSRect(origin: .zero, size: DesignTokens.windowSize),
-            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+            contentRect: NSRect(origin: .zero, size: initialSize),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         win.title = "Input-sa 偏好設定"
-        // System Settings look: the sidebar material runs under the title bar,
-        // traffic lights float over it. Title stays set for Mission Control/a11y.
+        // Keep a system window and native keyboard controls inside soft material.
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
         win.isMovableByWindowBackground = true
         win.backgroundColor = DesignTokens.Palette.canvas
+        win.contentMinSize = NSSize(width: 620, height: 520)
         // Voice PTT and the preferences shortcut both work from inside fullscreen apps
         // (CGEventTap, not app-switch-dependent) — without this the window would open
         // on the user's regular desktop Space while they stay stuck looking at the
@@ -93,8 +103,11 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
         super.init(window: win)
         win.delegate = self
         setupUI()
+        NotificationCenter.default.addObserver(self, selector: #selector(applicationWillTerminate(_:)),
+                                               name: NSApplication.willTerminateNotification, object: nil)
     }
     required init?(coder: NSCoder) { fatalError() }
+    deinit { NotificationCenter.default.removeObserver(self) }
 
     // MARK: - Setup
     private func setupUI() {
@@ -121,20 +134,15 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
         for pane in panes { contentView.addSubview(pane) }
 
         NSLayoutConstraint.activate([
-            // Fixed window size — the styleMask has no .resizable, and pinning
-            // the content view keeps Auto Layout from shrinking the window to
-            // any subview's fitting width.
-            contentView.widthAnchor.constraint(equalToConstant: DesignTokens.windowSize.width),
-            contentView.heightAnchor.constraint(equalToConstant: DesignTokens.windowSize.height),
             sidebar.topAnchor.constraint(equalTo: contentView.topAnchor),
             sidebar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            sidebar.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            sidebar.widthAnchor.constraint(equalToConstant: DesignTokens.sidebarWidth),
+            sidebar.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            sidebar.heightAnchor.constraint(equalToConstant: DesignTokens.preferencesHeaderHeight),
         ])
         for pane in panes {
             NSLayoutConstraint.activate([
-                pane.topAnchor.constraint(equalTo: contentView.topAnchor),
-                pane.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+                pane.topAnchor.constraint(equalTo: sidebar.bottomAnchor),
+                pane.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
                 pane.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
                 pane.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
             ])
@@ -145,15 +153,32 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
 
     /// One scrolling content pane: 22-pt pane title, then the tab's groups.
     private func makePane(title: String, content: NSView) -> NSScrollView {
-        let stack = NSStackView(views: [DesignTokens.paneTitle(title), content])
+        let subtitles = [
+            "語音服務": "先選擇如何辨識，再決定用什麼整理。",
+            "快捷鍵": "把常用動作放在順手的位置。",
+            "AI 模式": "保留你的語氣，為不同情境安排不同格式。",
+            "字詞庫": "人名、專有名詞與慣用拼寫，集中放在這裡。",
+            "使用統計": "看看你用聲音留下了多少文字。",
+        ]
+        let heading = NSStackView(views: [DesignTokens.paneTitle(title),
+            DesignTokens.caption(subtitles[title] ?? "")])
+        heading.orientation = .vertical
+        heading.alignment = .leading
+        heading.spacing = 5
+        let stack = NSStackView(views: [heading, content])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 18
+        stack.spacing = 24
         stack.edgeInsets = NSEdgeInsets(
-            top: 32, left: DesignTokens.contentPadding,
-            bottom: 30, right: DesignTokens.contentPadding)
-        content.widthAnchor.constraint(
-            equalToConstant: DesignTokens.contentWidth).isActive = true
+            top: 8, left: DesignTokens.contentPadding,
+            bottom: 48, right: DesignTokens.contentPadding)
+        for child in [heading, content] {
+            child.widthAnchor.constraint(equalTo: stack.widthAnchor,
+                constant: -2 * DesignTokens.contentPadding).isActive = true
+        }
+        for label in heading.arrangedSubviews {
+            label.widthAnchor.constraint(equalTo: heading.widthAnchor).isActive = true
+        }
 
         let doc = FlippedView()
         doc.translatesAutoresizingMaskIntoConstraints = false
@@ -162,7 +187,8 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
 
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
+        scroll.autohidesScrollers = false
+        scroll.scrollerStyle = .legacy
         scroll.hasHorizontalScroller = false
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
@@ -188,6 +214,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
     /// state back into the sidebar (no split-brain).
     private func showPane(_ index: Int) {
         guard (0..<panes.count).contains(index) else { return }
+        shortcutRecorders.values.forEach { $0.cancelRecordingIfActive() }
         for (i, pane) in panes.enumerated() { pane.isHidden = (i != index) }
         sidebar.select(index)
         refreshDashboard()   // cheap + nil-safe; keeps the stats current on each show
@@ -208,8 +235,11 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
         case .sherpa: providerPicker?.selectItem(at: 2)
         case .whisper: providerPicker?.selectItem(at: 3)
         }
-        polishProviderPicker?.selectItem(at: APIKeyStore.shared.polishProvider == .apple ? 1 : 0)
+        polishProviderPicker?.selectItem(at: Self.polishProviders.firstIndex(of: APIKeyStore.shared.polishProvider) ?? 0)
         cleanupStylePicker?.selectItem(at: DictationCleanupStyle.allCases.firstIndex(of: .selected) ?? 1)
+        voiceProviderChoices?.select(providerPicker?.indexOfSelectedItem ?? 0)
+        polishProviderChoices?.select(polishProviderPicker?.indexOfSelectedItem ?? 0)
+        cleanupStyleChoices?.select(cleanupStylePicker?.indexOfSelectedItem ?? 1)
         translatePopUp?.selectItem(withTitle: TranscriptionMode.translateTargetLanguage)
         updateServiceSectionVisibility()
         updateProviderStatus()
@@ -234,6 +264,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
     }
 
     func windowWillClose(_ notification: Notification) {
+        cancelCLIConnection()
         shortcutRecorders.values.forEach { $0.cancelRecordingIfActive() }
         saveAPIKeys()             // safety net: a field still mid-edit hasn't fired end-editing yet
         saveCommunityNickname()   // same safety net for the nickname field
@@ -250,5 +281,45 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
     /// user to notice, since the window that would show "按下快捷鍵..." isn't even visible.
     func windowDidResignKey(_ notification: Notification) {
         shortcutRecorders.values.forEach { $0.cancelRecordingIfActive() }
+    }
+
+    @objc private func applicationWillTerminate(_ notification: Notification) {
+        cancelCLIConnection()
+    }
+
+    /// Token invalidation happens before process cancellation because a runner
+    /// may deliver its completion immediately as the child process exits.
+    @objc func cancelCLIConnection() {
+        cliConnectionToken = nil
+        cliTestingProvider = nil
+        let request = cliConnectionRequest
+        cliConnectionRequest = nil
+        request?.cancel()
+        updatePolishProviderStatus()
+    }
+
+    @objc func testCLIConnection() {
+        let provider = APIKeyStore.shared.polishProvider
+        guard (provider == .codex || provider == .claude), cliTestingProvider == nil else { return }
+        let token = UUID()
+        cliConnectionToken = token
+        cliTestingProvider = provider
+        updatePolishProviderStatus()
+        cliConnectionRequest = CLITextService.shared.checkConnection(provider: provider) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self, self.cliConnectionToken == token else { return }
+                self.cliConnectionToken = nil
+                self.cliConnectionRequest = nil
+                self.cliTestingProvider = nil
+                self.updatePolishProviderStatus()
+                guard APIKeyStore.shared.polishProvider == provider else { return }
+                switch result {
+                case .success(let text):
+                    self.cliConnectionLabel.stringValue = "連線測試完成：\(text.prefix(180))"
+                case .failure(let error):
+                    self.cliConnectionLabel.stringValue = "測試未通過：\(error.localizedDescription.prefix(240))"
+                }
+            }
+        }
     }
 }

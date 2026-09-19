@@ -1,17 +1,8 @@
 import AppKit
 
-/// Flat grouped list for the AI-modes and dojo-vocabulary panes — one 48-pt
-/// row per entry with hairline separators, meant to sit INSIDE a
-/// `DesignTokens.groupCard` (it draws no card chrome of its own). Monochrome
-/// throughout: emoji/character tiles on a recessed well, badges by fill depth.
-///
-/// Interaction: hovering an editable row tints it with the well colour and
-/// crossfades its badges into 編輯/刪除 text buttons *in the same spot* — an
-/// alpha swap, deliberately not isHidden toggling, so nothing reflows under
-/// the cursor.
-///
-/// Height: hugs its content (rows × 48) up to `maxHeight`, then scrolls —
-/// grouped cards in the System Settings register never reserve dead space.
+/// Bounded list for modes and vocabulary. Editable rows always expose native
+/// edit/delete buttons; shared rows retain their read-only badge. Wrapping rows
+/// hug their content up to maxHeight, then scroll inside the material card.
 final class CardListView: NSView {
 
     struct Row {
@@ -37,7 +28,7 @@ final class CardListView: NSView {
     private let maxHeight: CGFloat
     private var heightConstraint: NSLayoutConstraint!
 
-    private static let rowHeight: CGFloat = 48
+    private static let rowHeight: CGFloat = 56
     private static let emptyHeight: CGFloat = 64
 
     init(maxHeight: CGFloat) {
@@ -45,7 +36,8 @@ final class CardListView: NSView {
         super.init(frame: .zero)
 
         scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
+        scroll.autohidesScrollers = false
+        scroll.scrollerStyle = .legacy
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         scroll.translatesAutoresizingMaskIntoConstraints = false
@@ -100,6 +92,17 @@ final class CardListView: NSView {
             ? Self.emptyHeight
             : CGFloat(rows.count) * Self.rowHeight + CGFloat(max(0, rows.count - 1))
         heightConstraint.constant = min(contentHeight, maxHeight)
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        guard !stack.arrangedStack.arrangedSubviews.isEmpty, bounds.width > 0 else { return }
+        stack.layoutSubtreeIfNeeded()
+        let height = min(max(Self.rowHeight, ceil(stack.fittingSize.height)), maxHeight)
+        if abs(heightConstraint.constant - height) > 0.5 {
+            heightConstraint.constant = height
+        }
     }
 }
 
@@ -127,7 +130,7 @@ private final class FlippedStackContainer: NSView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-/// One flat list row. Fixed height; hover tints + crossfades badges ↔ actions.
+/// One list row with subtle hover and persistent, keyboard-accessible actions.
 private final class EntryRowView: NSView {
     var onEdit: (() -> Void)?
     var onDelete: (() -> Void)?
@@ -138,11 +141,12 @@ private final class EntryRowView: NSView {
     private var isReadOnly = false
     private var hovering = false
 
-    private static let rowHeight: CGFloat = 48
+    private static let rowHeight: CGFloat = 56
 
     init(row: CardListView.Row) {
         super.init(frame: .zero)
         wantsLayer = true
+        layer?.cornerRadius = 12
         isReadOnly = row.isReadOnly
 
         var leading: [NSView] = []
@@ -150,33 +154,28 @@ private final class EntryRowView: NSView {
             leading.append(WellTile(text: icon))
         }
 
-        // Attributed values override the field's own lineBreakMode — bake the
-        // truncation into a paragraph style or the label wraps to two lines
-        // inside the fixed-height row.
-        let truncating = NSMutableParagraphStyle()
-        truncating.lineBreakMode = .byTruncatingTail
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
         let titleText = NSMutableAttributedString(attributedString: row.title)
-        titleText.addAttribute(.paragraphStyle, value: truncating,
+        titleText.addAttribute(.paragraphStyle, value: paragraph,
                                range: NSRange(location: 0, length: titleText.length))
-        let titleLabel = NSTextField(labelWithString: "")
+        let titleLabel = WrappingTextField("")
         titleLabel.attributedStringValue = titleText
-        titleLabel.maximumNumberOfLines = 1
-        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let textStack = NSStackView(views: [titleLabel])
         textStack.orientation = .vertical
         textStack.alignment = .leading
         textStack.spacing = 2
         if !row.subtitle.isEmpty {
-            let subtitleLabel = NSTextField(labelWithString: row.subtitle)
+            let subtitleLabel = WrappingTextField(row.subtitle)
             subtitleLabel.font = DesignTokens.uiFont(11)
-            subtitleLabel.textColor = DesignTokens.Palette.inkMuted(0.55)
-            subtitleLabel.lineBreakMode = .byTruncatingTail
-            subtitleLabel.maximumNumberOfLines = 1
-            subtitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            subtitleLabel.textColor = DesignTokens.Palette.inkMuted(0.68)
             textStack.addArrangedSubview(subtitleLabel)
             subtitleLabel.widthAnchor.constraint(equalTo: textStack.widthAnchor).isActive = true
         }
+        titleLabel.widthAnchor.constraint(equalTo: textStack.widthAnchor).isActive = true
+        textStack.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        textStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         badgeStack.orientation = .horizontal
         badgeStack.spacing = 5
@@ -195,28 +194,30 @@ private final class EntryRowView: NSView {
             actionStack.spacing = 2
             actionStack.addArrangedSubview(editBtn)
             actionStack.addArrangedSubview(delBtn)
-            actionStack.alphaValue = 0
         }
 
-        let content = NSStackView(views: leading + [textStack, NSView(), badgeStack])
+        var trailing: [NSView] = []
+        if !row.badges.isEmpty { trailing.append(badgeStack) }
+        if !row.isReadOnly { trailing.append(actionStack) }
+        for view in trailing {
+            view.setContentHuggingPriority(.required, for: .horizontal)
+            view.setContentCompressionResistancePriority(.required, for: .horizontal)
+        }
+        let content = NSStackView(views: leading + [textStack] + trailing)
         content.orientation = .horizontal
+        content.distribution = .fill
         content.spacing = 11
         content.alignment = .centerY
-        content.edgeInsets = NSEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)
+        content.edgeInsets = NSEdgeInsets(top: 12, left: 16, bottom: 12, right: 16)
         content.translatesAutoresizingMaskIntoConstraints = false
         addSubview(content)
-        // Actions float over the badges' spot (same trailing edge) for the alpha crossfade.
-        actionStack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(actionStack)
 
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: Self.rowHeight),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: Self.rowHeight),
             content.topAnchor.constraint(equalTo: topAnchor),
             content.leadingAnchor.constraint(equalTo: leadingAnchor),
             content.trailingAnchor.constraint(equalTo: trailingAnchor),
             content.bottomAnchor.constraint(equalTo: bottomAnchor),
-            actionStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            actionStack.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -256,11 +257,6 @@ private final class EntryRowView: NSView {
     private func setHover(_ h: Bool) {
         hovering = h
         applyBackground()
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.15
-            badgeStack.animator().alphaValue = h ? 0 : 1
-            actionStack.animator().alphaValue = h ? 1 : 0
-        }
     }
 }
 

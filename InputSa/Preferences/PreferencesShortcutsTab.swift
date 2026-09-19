@@ -33,7 +33,7 @@ extension PreferencesWindowController {
             "點任一格 → 按下想要的鍵。長按型（聽寫／翻譯／口頭加詞／劃詞問答）可只按單顆修飾鍵（如右 ⌥）；按 ⎋ 取消錄製。")
 
         // Conflict / unmodified-key warning (hidden unless something needs attention).
-        shortcutWarningLabel = NSTextField(wrappingLabelWithString: "")
+        shortcutWarningLabel = WrappingTextField("")
         shortcutWarningLabel.font = DesignTokens.uiFont(11, weight: .medium)
         shortcutWarningLabel.textColor = DesignTokens.Palette.statusWarn
         shortcutWarningLabel.preferredMaxLayoutWidth = DesignTokens.contentWidth - 8
@@ -56,8 +56,9 @@ extension PreferencesWindowController {
         shortcutGroup.orientation = .vertical
         shortcutGroup.alignment = .leading
         shortcutGroup.spacing = 7
-        shortcutGroup.arrangedSubviews.first!.widthAnchor.constraint(
-            equalTo: shortcutGroup.widthAnchor).isActive = true
+        for child in shortcutGroup.arrangedSubviews {
+            child.widthAnchor.constraint(equalTo: shortcutGroup.widthAnchor).isActive = true
+        }
 
         let stack = NSStackView(views: [
             shortcutGroup,
@@ -77,14 +78,19 @@ extension PreferencesWindowController {
 
     /// Recorder + optional muted「長按」hint for hold (push-to-talk) actions.
     private func recorderControl(_ recorder: ShortcutRecorderView, hold: Bool) -> NSView {
-        guard hold else { return recorder }
         let holdLabel = DesignTokens.styledLabel(
-            "長按", size: 11, weight: .regular, kern: -0.1,
+            hold ? "長按" : "", size: 11, weight: .regular, kern: -0.1,
             color: DesignTokens.Palette.inkMuted(0.35))
         let cluster = NSStackView(views: [recorder, holdLabel])
         cluster.orientation = .horizontal
+        cluster.distribution = .fill
         cluster.alignment = .centerY
         cluster.spacing = 6
+        NSLayoutConstraint.activate([
+            recorder.widthAnchor.constraint(equalToConstant: 140),
+            holdLabel.widthAnchor.constraint(equalToConstant: 28),
+            cluster.widthAnchor.constraint(equalToConstant: 174),
+        ])
         return cluster
     }
 

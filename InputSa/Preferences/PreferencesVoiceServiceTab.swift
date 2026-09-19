@@ -1,11 +1,7 @@
 import AppKit
 
-/// 語音服務 pane — transcription provider + AI polish provider + API keys +
-/// community nickname. Same control tree and data flow as always; the
-/// 2026-07-16 v3 redesign changed only the visual container language:
-/// System Settings grouped cards (status row, popup row, field rows with
-/// hairline separators) instead of flat typographic groups, and native
-/// NSPopUpButtons instead of the hand-drawn pill segmented control.
+/// Service choices are visible cards; credentials and capability details stay
+/// below the selection. Hidden native pickers retain the existing action API.
 extension PreferencesWindowController {
 
     func makeVoiceServiceContent() -> NSView {
@@ -27,6 +23,18 @@ extension PreferencesWindowController {
             items: ["Groq Whisper", "Google STT（含台語）", "本地 \(SherpaVoiceService.modelDisplayName)", "本地 Whisper Turbo"],
             selectedIndex: initialProviderIdx,
             target: self, action: #selector(providerPopupChanged(_:)))
+        voiceProviderChoices = SoftChoiceGrid(options: [
+            .init(title: "Groq Whisper", detail: "雲端 · 快速語音轉錄"),
+            .init(title: "Google STT", detail: "雲端 · 中文與台語"),
+            .init(title: "本地 \(SherpaVoiceService.modelDisplayName)", detail: "離線 · 快速輕量辨識"),
+            .init(title: "Whisper Turbo", detail: "離線 · 詞庫提示與暫時字幕"),
+        ], selectedIndex: initialProviderIdx)
+        voiceProviderChoices.onSelect = { [weak self] index in
+            guard let self else { return }
+            self.providerPicker.selectItem(at: index)
+            self.providerPopupChanged(self.providerPicker)
+            self.voiceProviderChoices.select(self.providerPicker.indexOfSelectedItem)
+        }
 
         // ── Groq section (conditional rows own their leading hairline) ──
         groqField = makeKeyField(placeholder: "gsk_...")
@@ -53,13 +61,11 @@ extension PreferencesWindowController {
         muteWhileRecordingSwitch.state = PreferencesWindowController.muteWhileRecording ? .on : .off
         muteWhileRecordingSwitch.target = self
         muteWhileRecordingSwitch.action = #selector(muteWhileRecordingChanged)
-        let modelButton = NSButton(title: "管理模型…", target: self, action: #selector(openWhisperModelManager))
-        modelButton.bezelStyle = .rounded
+        let modelButton = DesignTokens.pushButton(title: "管理模型…", target: self,
+                                                  action: #selector(openWhisperModelManager))
 
         let transcribeCard = DesignTokens.groupCard([
             status.row,
-            DesignTokens.hairline(),
-            DesignTokens.row(title: "服務", control: providerPicker),
             groqSection,
             googleSection,
             DesignTokens.hairline(),
@@ -71,8 +77,8 @@ extension PreferencesWindowController {
         ], autoSeparators: false)
 
         let serviceHint = DesignTokens.caption(
-            "Groq／Google STT 會將錄音送到所選雲端服務；本地 SenseVoice／Paraformer 與 Whisper 於這台 Mac 辨識。" +
-            "Whisper 支援錄音暫時字幕，停止後重新辨識完整內容；其他引擎於放開後顯示結果。")
+            "SenseVoice 快速、完全本地，但不支援專有名詞提示。Whisper 支援中英夾雜的有限詞庫提示與暫時字幕；" +
+            "模型準備完成後可自行切換，辨識結果仍依錄音而異。Groq／Google 會將錄音傳至對應雲端服務。")
 
         // ── Group 2: AI 潤飾服務 ────────────────────────────────
         let polishStatus = DesignTokens.statusRow(caption: "目前使用",
@@ -81,25 +87,65 @@ extension PreferencesWindowController {
         polishStatusLabel = polishStatus.valueLabel
         polishStatusDot = polishStatus.dotView
 
-        let initialPolishIdx = APIKeyStore.shared.polishProvider == .apple ? 1 : 0
+        let initialPolishIdx = Self.polishProviders.firstIndex(of: APIKeyStore.shared.polishProvider) ?? 0
         polishProviderPicker = DesignTokens.popup(
-            items: ["Gemini（雲端）", "Apple 本地"],
+            items: Self.polishProviders.map(\.displayName),
             selectedIndex: initialPolishIdx,
             target: self, action: #selector(polishPopupChanged(_:)))
+        polishProviderChoices = SoftChoiceGrid(options: [
+            .init(title: "Gemini", detail: "雲端 · 使用自己的 API Key"),
+            .init(title: "Apple 本地", detail: "離線 · Apple Intelligence"),
+            .init(title: "Codex CLI", detail: "使用這台 Mac 的 Codex 登入"),
+            .init(title: "Claude Code", detail: "使用這台 Mac 的 Claude 登入"),
+        ], selectedIndex: initialPolishIdx)
+        polishProviderChoices.onSelect = { [weak self] index in
+            guard let self else { return }
+            self.polishProviderPicker.selectItem(at: index)
+            self.polishPopupChanged(self.polishProviderPicker)
+            let effective = Self.polishProviders.firstIndex(of: APIKeyStore.shared.polishProvider) ?? 0
+            self.polishProviderPicker.selectItem(at: effective)
+            self.polishProviderChoices.select(effective)
+        }
 
         geminiField = makeKeyField(placeholder: "AIzaSy...")
         cleanupStylePicker = DesignTokens.popup(items: DictationCleanupStyle.allCases.map(\.title),
             selectedIndex: DictationCleanupStyle.allCases.firstIndex(of: .selected) ?? 1,
             target: self, action: #selector(cleanupStyleChanged(_:)))
+        cleanupStyleChoices = SoftSegmentedPicker(labels: DictationCleanupStyle.allCases.map(\.title),
+            selectedIndex: cleanupStylePicker.indexOfSelectedItem)
+        cleanupStyleChoices.widthAnchor.constraint(equalToConstant: 290).isActive = true
+        cleanupStyleChoices.onSelect = { [weak self] index in
+            guard let self else { return }
+            self.cleanupStylePicker.selectItem(at: index)
+            self.cleanupStyleChanged(self.cleanupStylePicker)
+        }
+
+        cliConnectionTestButton = DesignTokens.pushButton(title: "測試連線", target: self,
+                                                          action: #selector(testCLIConnection))
+        cliConnectionCancelButton = DesignTokens.pushButton(title: "取消測試", target: self,
+                                                            action: #selector(cancelCLIConnection))
+        cliConnectionCancelButton.isHidden = true
+        let cliActions = NSStackView(views: [cliConnectionTestButton, cliConnectionCancelButton])
+        cliActions.orientation = .horizontal
+        cliActions.spacing = 4
+        cliConnectionLabel = DesignTokens.caption("", width: DesignTokens.contentWidth - 56)
+        let cliNote = NSStackView(views: [cliConnectionLabel])
+        cliNote.orientation = .vertical
+        cliNote.alignment = .leading
+        cliNote.edgeInsets = NSEdgeInsets(top: 0, left: 20, bottom: 12, right: 20)
+        cliConnectionLabel.widthAnchor.constraint(equalTo: cliNote.widthAnchor, constant: -40).isActive = true
+        cliConfigurationSection = conditionalSection(rows: [
+            DesignTokens.row(title: "CLI 連線", subtitle: "測試只使用內建範例句，不讀取你的口述", control: cliActions),
+            cliNote,
+        ])
 
         let polishCard = DesignTokens.groupCard([
             polishStatus.row,
             DesignTokens.hairline(),
-            DesignTokens.row(title: "服務", control: polishProviderPicker),
-            DesignTokens.hairline(),
-            DesignTokens.row(title: "口述整理強度", subtitle: "原文不呼叫 AI；輕整理保留用詞；結構整理分段列點", control: cleanupStylePicker),
+            DesignTokens.row(title: "整理強度", control: cleanupStyleChoices),
+            cliConfigurationSection,
             conditionalSection(rows: [   // not conditional, but reuses the hairline wrapper
-                DesignTokens.row(title: "Gemini API Key", control: geminiField),
+                DesignTokens.row(title: "Gemini API Key", subtitle: "翻譯與口頭加詞使用", control: geminiField),
                 trailingLinkRow(note: nil,
                                 link: makeLinkButton(title: "前往 AI Studio 取得 ↗",
                                                      url: "https://aistudio.google.com/app/apikey")),
@@ -107,51 +153,59 @@ extension PreferencesWindowController {
         ], autoSeparators: false)
 
         let polishHint = DesignTokens.caption(
-            "Gemini 需網路與 API Key · Apple 本地完全離線、免 Key（需 macOS 26 ＋ " +
-            "Apple Intelligence）。翻譯（右 ⌘）與口頭加詞固定使用 Gemini，不受此設定影響。")
+            "Gemini 使用 API Key；Apple 本地需 macOS 26 與 Apple Intelligence。Codex／Claude 須先自行安裝並登入，" +
+            "找到執行檔不代表已登入。CLI 整理仍透過對應服務處理文字，並非離線模型。翻譯與口頭加詞仍使用 Gemini。")
 
         // ── Auto-save (macOS preferences convention: no explicit save button;
         //    keys are written to Keychain the moment a field ends editing) ──
         [groqField, googleSttField, geminiField].forEach { $0.delegate = self }
 
-        // ── Group 3: 共編詞庫（community nickname）──────────────
+        let noteLabel = DesignTokens.caption(
+            "原文不呼叫 AI；輕整理保留用詞；結構整理依內容分段。API Key 修改後自動儲存至系統 Keychain。")
+
+        let stack = serviceColumn([
+            DesignTokens.group(title: "用什麼辨識", card: serviceColumn([voiceProviderChoices, transcribeCard], spacing: 12), footnote: serviceHint),
+            DesignTokens.group(title: "用什麼整理", card: serviceColumn([polishProviderChoices, polishCard], spacing: 12), footnote: polishHint),
+            noteLabel,
+        ], spacing: DesignTokens.Spacing.section)
+        updateServiceSectionVisibility()
+        updateProviderStatus()
+        updatePolishProviderStatus()
+        return stack
+    }
+
+    /// Kept next to its persistence handlers, shown with the vocabulary itself.
+    func makeCommunityPreferencesSection() -> NSView {
         communityNicknameField = NSTextField()
-        communityNicknameField.placeholderString = "選填——分享詞條時附上的署名"
+        communityNicknameField.placeholderString = "分享詞條時的署名（選填）"
         communityNicknameField.font = DesignTokens.uiFont(12)
         communityNicknameField.stringValue =
             UserDefaults.standard.string(forKey: DojoSharedSync.nicknameKey) ?? ""
         communityNicknameField.isEditable = true
         communityNicknameField.isSelectable = true
         communityNicknameField.delegate = self   // auto-save on end-editing (same as key fields)
-        communityNicknameField.widthAnchor.constraint(equalToConstant: 220).isActive = true
-
-        let communityCard = DesignTokens.groupCard([
-            DesignTokens.row(title: "共編暱稱", control: communityNicknameField),
-        ])
+        let nicknameContent = NSStackView(views: [DesignTokens.sectionLabel("共編暱稱"), communityNicknameField])
+        nicknameContent.orientation = .vertical
+        nicknameContent.alignment = .leading
+        nicknameContent.spacing = 8
+        nicknameContent.edgeInsets = NSEdgeInsets(top: 12, left: 20, bottom: 12, right: 20)
+        communityNicknameField.widthAnchor.constraint(equalTo: nicknameContent.widthAnchor, constant: -40).isActive = true
+        let communityCard = DesignTokens.groupCard([nicknameContent])
         let communityHint = DesignTokens.caption(
             "App 啟動時自動同步社群共享的「已審核」詞條（帶「共編」標記、唯讀）。" +
             "口頭加詞時可選擇分享自己的詞條；暱稱僅用於標示分享者，可留空。")
 
-        let noteLabel = DesignTokens.caption(
-            "API Key 修改後自動儲存至系統 Keychain。Gemini 為選填，未設定時跳過 AI 潤飾步驟。")
+        return DesignTokens.group(title: "共編詞庫", card: communityCard, footnote: communityHint)
+    }
 
-        // ── Assemble ──────────────────────────────────────────
-        let stack = NSStackView(views: [
-            DesignTokens.group(title: "語音轉錄服務", card: transcribeCard, footnote: serviceHint),
-            DesignTokens.group(title: "AI 潤飾服務", card: polishCard, footnote: polishHint),
-            DesignTokens.group(title: "共編詞庫", card: communityCard, footnote: communityHint),
-            noteLabel,
-        ])
+    private func serviceColumn(_ views: [NSView], spacing: CGFloat) -> NSStackView {
+        let stack = NSStackView(views: views)
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = DesignTokens.Spacing.section
-        for group in stack.arrangedSubviews where !(group is NSTextField) {
+        stack.spacing = spacing
+        for group in stack.arrangedSubviews {
             group.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
-
-        updateServiceSectionVisibility()
-        updateProviderStatus()
-        updatePolishProviderStatus()
 
         return stack
     }
@@ -165,6 +219,9 @@ extension PreferencesWindowController {
         field.font = DesignTokens.monoFont(11)
         field.isEditable = true
         field.isSelectable = true
+        field.bezelStyle = .roundedBezel
+        field.backgroundColor = DesignTokens.Palette.pressed
+        field.textColor = DesignTokens.Palette.ink
         field.widthAnchor.constraint(equalToConstant: 220).isActive = true
         return field
     }
@@ -187,12 +244,12 @@ extension PreferencesWindowController {
     private func trailingLinkRow(note: String?, link: NSButton) -> NSView {
         var views: [NSView] = []
         if let note {
-            let noteLabel = DesignTokens.styledLabel(
-                note, size: 11, weight: .regular, kern: -0.1,
-                color: DesignTokens.Palette.inkMuted(0.45))
+            let noteLabel = DesignTokens.caption(note)
             views.append(noteLabel)
         }
-        views.append(NSView())
+        if note == nil { views.append(NSView()) }
+        link.setContentCompressionResistancePriority(.required, for: .horizontal)
+        link.setContentHuggingPriority(.required, for: .horizontal)
         views.append(link)
         let row = NSStackView(views: views)
         row.orientation = .horizontal
@@ -217,16 +274,19 @@ extension PreferencesWindowController {
     }
 
     private func polishProviderChanged(_ selectedIndex: Int) {
-        let wantApple = (selectedIndex == 1)
+        guard Self.polishProviders.indices.contains(selectedIndex) else { return }
+        cancelCLIConnection()
+        let requested = Self.polishProviders[selectedIndex]
+        let wantApple = requested == .apple
         // Transparent fallback: if the user taps Apple but the on-device model
         // isn't available on this machine, keep Gemini as the effective provider
         // and explain why in the status row — never silently persist a provider
         // that will just fail at dictation time. (Runtime failures of an available
         // Apple model fall back to the raw transcript, never a silent cloud call.)
-        if wantApple, ApplePolishService.availabilityStatus.isAvailable {
-            APIKeyStore.shared.polishProvider = .apple
-        } else {
+        if wantApple && !ApplePolishService.availabilityStatus.isAvailable {
             APIKeyStore.shared.polishProvider = .gemini
+        } else {
+            APIKeyStore.shared.polishProvider = requested
         }
         updatePolishProviderStatus(requestedApple: wantApple)
     }
@@ -245,12 +305,30 @@ extension PreferencesWindowController {
         } else if provider == .apple {
             (caption, value, dot) = ("目前使用", "Apple 本地 · 完全離線",
                                      DesignTokens.Palette.statusOK)
-        } else {
+        } else if provider == .gemini {
             (caption, value, dot) = ("目前使用", "Gemini（雲端）· 需網路",
                                      DesignTokens.Palette.statusOK)
+        } else {
+            let found = CLITextService.isAvailable(provider: provider)
+            (caption, value, dot) = ("目前使用", provider.displayName + (found ? " · 已找到 CLI" : " · 尚未找到 CLI"),
+                                     found ? DesignTokens.Palette.statusOK : DesignTokens.Palette.statusWarn)
         }
         setStatus(caption: polishStatusCaption, value: polishStatusLabel,
                   dotView: polishStatusDot, captionText: caption, valueText: value, dot: dot)
+        let isCLI = provider == .codex || provider == .claude
+        cliConfigurationSection?.isHidden = !isCLI
+        cliConnectionCancelButton?.isHidden = cliTestingProvider == nil
+        if isCLI {
+            let found = CLITextService.isAvailable(provider: provider)
+            cliConnectionTestButton?.isEnabled = cliTestingProvider == nil && found
+            if let testing = cliTestingProvider {
+                cliConnectionLabel?.stringValue = "正在用內建範例句測試 \(testing.displayName)…"
+            } else {
+                cliConnectionLabel?.stringValue = found
+                    ? "已找到 \(provider.displayName)。按「測試連線」確認登入與文字整理能力；不會替你安裝或登入。"
+                    : "尚未找到 \(provider.displayName)。請先在終端機完成官方安裝與登入，再重新開啟此頁測試。"
+            }
+        }
     }
 
     private func serviceProviderChanged(_ selectedIndex: Int) {

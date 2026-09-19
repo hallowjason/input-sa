@@ -141,6 +141,8 @@ final class GoogleVoiceService: NSObject, VoiceServiceProtocol {
                 "alternativeLanguageCodes":   ["nan-TW", "en-US"],
                 "enableAutomaticPunctuation": true,
                 "model":                      "latest_long",
+                "speechContexts": SpeechRecognitionHints.googleSpeechContexts(vocabulary:
+                    DojoCorrectionTable.shared.preferredTerms(for: "", maxTerms: 40, maxCharacters: 800)),
             ],
             "audio": [
                 "content": audioData.base64EncodedString(),

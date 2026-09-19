@@ -59,9 +59,20 @@ final class APIKeyStore {
     /// Which service handles dictation polish and Option+P text polish. Defaults
     /// to Gemini (cloud); Apple is the fully-offline on-device option. Translation
     /// and 口頭加詞 always use Gemini regardless of this setting.
-    enum PolishProvider: String {
+    enum PolishProvider: String, CaseIterable {
         case gemini = "gemini"
         case apple  = "apple"
+        case codex  = "codex"
+        case claude = "claude"
+
+        var displayName: String {
+            switch self {
+            case .gemini: return "Gemini"
+            case .apple: return "Apple 本地"
+            case .codex: return "Codex CLI"
+            case .claude: return "Claude Code"
+            }
+        }
     }
 
     var polishProvider: PolishProvider {

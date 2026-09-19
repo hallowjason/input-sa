@@ -25,7 +25,7 @@ extension PreferencesWindowController {
 
         let hintLabel = DesignTokens.caption(
             "在選單列「AI 模式」選定後，聽寫潤飾與選字潤飾（Option＋P）都會套用該模式。" +
-            "內建模式（標準／IG 貼文／條列重點／正式書信）由選單列切換，此處管理自訂模式。")
+            "「語音服務」可選原文、輕整理或結構整理，此處管理自己的整理指令。")
 
         let stack = NSStackView(views: [
             DesignTokens.group(title: "自訂模式", card: card, footnote: hintLabel),

@@ -1,19 +1,9 @@
 import AppKit
 
-/// Shared visual constants for the Preferences window (plus the handful of
-/// legacy names the voice HUD and editor sheets depend on).
-///
-/// Design system (2026-07-16 redesign v3, "Apple"):
-/// the layout skeleton is macOS System Settings — a sidebar plus grouped
-/// white-card rows — and the visual discipline is apple.com's: a neutral
-/// #f5f5f7 canvas, near-black ink, hairline separators, and exactly ONE
-/// chromatic accent (Apple Blue #0071e3) reserved for interactive elements.
-/// Status dots (green/orange) are semantic state colours, not decoration;
-/// everything else is monochrome. No gradients, no borders except hairlines,
-/// no colour-coded badges — hierarchy comes from fill depth, not hue.
+/// Shared soft-material palette. Surface depth and spacing establish hierarchy;
+/// restrained gold keeps Input-sa's identity without competing with the text.
 enum DesignTokens {
-    /// Warm gold accent — the HUD's particle/waveform colour. Preferences no
-    /// longer uses it anywhere; kept solely for VoiceHUDController.
+    /// Warm gold for the established Guanyin HUD's particles and waveform.
     static let accentGold = NSColor(red: 0.93, green: 0.76, blue: 0.38, alpha: 1.0)
 
     // MARK: - Colour primitives
@@ -29,33 +19,36 @@ enum DesignTokens {
         NSColor(name: nil) { $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light }
     }
 
-    // MARK: - Palette (apple.com discipline, System Settings surfaces)
+    // MARK: - Appearance-aware soft material
 
     enum Palette {
         /// Window canvas behind the grouped cards.
-        static let canvas = dynamic(rgb(0xf5, 0xf5, 0xf7), rgb(0x1d, 0x1d, 0x20))
+        static let canvas = dynamic(rgb(0xed, 0xee, 0xf1), rgb(0x29, 0x2c, 0x32))
         /// Grouped card surface.
-        static let card   = dynamic(.white, rgb(0x29, 0x29, 0x2c))
+        static let card = canvas
+        static let pressed = dynamic(rgb(0xe2, 0xe4, 0xe8), rgb(0x24, 0x27, 0x2d))
+        static let lightEdge = dynamic(rgb(0xff, 0xff, 0xff, 0.88), rgb(0x4d, 0x51, 0x5c, 0.50))
+        static let softShadow = dynamic(rgb(0x9e, 0xa3, 0xae, 0.42), rgb(0x0c, 0x0e, 0x12, 0.65))
         /// Primary text and solid monochrome fills.
-        static let ink    = dynamic(rgb(0x1d, 0x1d, 0x1f), rgb(0xf5, 0xf5, 0xf7))
+        static let ink    = dynamic(rgb(0x2b, 0x2e, 0x34), rgb(0xeb, 0xec, 0xef))
         /// Text on ink fills (filled badges, InkPillButton).
         static let inkInverse = dynamic(.white, rgb(0x1d, 0x1d, 0x1f))
 
         static func inkMuted(_ alpha: CGFloat = 0.55) -> NSColor { ink.withAlphaComponent(alpha) }
 
         /// Row/card hairline separator.
-        static let sep = dynamic(rgb(0, 0, 0, 0.08), rgb(0xff, 0xff, 0xff, 0.09))
+        static let sep = dynamic(rgb(0x6b, 0x71, 0x7d, 0.12), rgb(0xc2, 0xc6, 0xd2, 0.10))
         /// Alias kept for HairlineView call sites.
         static var hairline: NSColor { sep }
         /// Recessed monochrome well — key caps, emoji tiles, soft badges.
-        static let well = dynamic(rgb(0, 0, 0, 0.05), rgb(0xff, 0xff, 0xff, 0.09))
+        static let well = dynamic(rgb(0xd8, 0xdc, 0xe3, 0.6), rgb(0x15, 0x18, 0x1e, 0.50))
 
         /// THE accent. Interactive elements only: selected sidebar item,
         /// text buttons, links. Never for emphasis or decoration.
-        static let accent = rgb(0x00, 0x71, 0xe3)
+        static let accent = dynamic(rgb(0x8b, 0x71, 0x3e), rgb(0xd3, 0xb8, 0x79))
         /// Inline text links (slightly darker for text-level readability;
         /// brighter on dark backgrounds).
-        static let link = dynamic(rgb(0x00, 0x66, 0xcc), rgb(0x29, 0x97, 0xff))
+        static let link = dynamic(rgb(0x59, 0x5e, 0x69), rgb(0xc7, 0xca, 0xd2))
         /// Destructive text buttons (刪除) — semantic red, Apple HIG.
         static let destructive = dynamic(rgb(0xd7, 0x00, 0x15), rgb(0xff, 0x69, 0x61))
 
@@ -66,17 +59,18 @@ enum DesignTokens {
 
     // MARK: - Geometry
 
-    static let windowSize = NSSize(width: 780, height: 560)
-    static let sidebarWidth: CGFloat = 210
-    static let cardCornerRadius: CGFloat = 10
+    static let windowSize = NSSize(width: 700, height: 820)
+    static let sidebarWidth: CGFloat = 0
+    static let preferencesHeaderHeight: CGFloat = 156
+    static let cardCornerRadius: CGFloat = 20
     /// Horizontal padding of a content pane.
-    static let contentPadding: CGFloat = 28
-    /// Content column width inside a pane (window − sidebar − 2 × padding).
+    static let contentPadding: CGFloat = 32
+    /// Full-width content column below the settings header.
     /// Single source of truth for every card/footnote width pin.
-    static let contentWidth: CGFloat = 780 - 210 - 2 * 28
+    static let contentWidth: CGFloat = 660 - 2 * 32
 
     enum Spacing {
-        static let section: CGFloat = 22   // between sibling groups in a pane
+        static let section: CGFloat = 28   // between sibling groups in a pane
         static let item: CGFloat = 10      // between stacked controls
         static let compact: CGFloat = 6    // between tightly related controls
         static let field: CGFloat = 4      // between a field and its inline caption
@@ -115,19 +109,19 @@ enum DesignTokens {
 
     /// Pane heading — "語音服務" at the top of a content pane.
     static func paneTitle(_ text: String) -> NSTextField {
-        styledLabel(text, size: 22, weight: .semibold, kern: -0.35, color: Palette.ink)
+        styledLabel(text, size: 20, weight: .semibold, kern: -0.25, color: Palette.ink)
     }
 
     /// Group heading above a card — 13 pt semibold ink, sentence case.
     static func sectionLabel(_ text: String) -> NSTextField {
-        styledLabel(text, size: 13, weight: .semibold, kern: -0.2, color: Palette.ink)
+        styledLabel(text, size: 13, weight: .semibold, kern: 0, color: Palette.ink)
     }
 
     /// Wrapping footnote under a card. 11 pt muted ink.
     static func caption(_ text: String, width: CGFloat = contentWidth - 8) -> NSTextField {
-        let label = NSTextField(wrappingLabelWithString: text)
-        label.font = uiFont(11)
-        label.textColor = Palette.inkMuted(0.55)
+        let label = WrappingTextField(text)
+        label.font = uiFont(12)
+        label.textColor = Palette.inkMuted(0.70)
         label.preferredMaxLayoutWidth = width
         label.isSelectable = false
         return label
@@ -146,32 +140,37 @@ enum DesignTokens {
     /// One card row: 13 pt title (plus optional 11 pt subtitle) left,
     /// control right. Min height 44, side insets 16.
     static func row(title: String, subtitle: String? = nil, control: NSView? = nil) -> NSView {
-        let titleLabel = styledLabel(title, size: 13, weight: .regular, kern: -0.2,
-                                     color: Palette.ink)
-        titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let titleLabel = WrappingTextField(title)
+        titleLabel.font = uiFont(13)
+        titleLabel.textColor = Palette.ink
         let textStack = NSStackView(views: [titleLabel])
         textStack.orientation = .vertical
         textStack.alignment = .leading
         textStack.spacing = 2
         if let subtitle, !subtitle.isEmpty {
-            let sub = NSTextField(wrappingLabelWithString: subtitle)
+            let sub = WrappingTextField(subtitle)
             sub.font = uiFont(11)
-            sub.textColor = Palette.inkMuted(0.55)
-            sub.preferredMaxLayoutWidth = 330
-            sub.isSelectable = false
+            sub.textColor = Palette.inkMuted(0.70)
             textStack.addArrangedSubview(sub)
         }
+        for label in textStack.arrangedSubviews {
+            label.widthAnchor.constraint(equalTo: textStack.widthAnchor).isActive = true
+        }
+        textStack.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        textStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         var views: [NSView] = [textStack]
         if let control {
-            views.append(NSView())   // spring pushes the control to the trailing edge
+            control.setContentHuggingPriority(.required, for: .horizontal)
+            control.setContentCompressionResistancePriority(.required, for: .horizontal)
             views.append(control)
         }
         let row = NSStackView(views: views)
         row.orientation = .horizontal
+        row.distribution = .fill
         row.alignment = .centerY
         row.spacing = 12
-        row.edgeInsets = NSEdgeInsets(top: 9, left: 16, bottom: 9, right: 16)
-        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        row.edgeInsets = NSEdgeInsets(top: 12, left: 20, bottom: 12, right: 20)
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 48).isActive = true
         return row
     }
 
@@ -180,18 +179,23 @@ enum DesignTokens {
     static func statusRow(caption: String, value: String, dot: NSColor)
         -> (row: NSView, captionLabel: NSTextField, valueLabel: NSTextField,
             dotView: StatusDotView) {
-        let captionLabel = styledLabel(caption, size: 13, weight: .regular, kern: -0.2,
-                                       color: Palette.ink)
-        let valueLabel = styledLabel(value, size: 12, weight: .medium, kern: -0.15,
-                                     color: Palette.ink)
+        let captionLabel = WrappingTextField(caption)
+        captionLabel.font = uiFont(13)
+        captionLabel.textColor = Palette.ink
+        let valueLabel = WrappingTextField(value)
+        valueLabel.font = uiFont(12, weight: .medium)
+        valueLabel.textColor = Palette.ink
+        valueLabel.alignment = .right
         let dotView = StatusDotView(color: dot)
-        let row = NSStackView(views: [captionLabel, NSView(), dotView, valueLabel])
+        let row = NSStackView(views: [captionLabel, dotView, valueLabel])
         row.orientation = .horizontal
+        row.distribution = .fill
         row.alignment = .centerY
         row.spacing = 8
         row.setCustomSpacing(12, after: captionLabel)
-        row.edgeInsets = NSEdgeInsets(top: 9, left: 16, bottom: 9, right: 16)
-        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        row.edgeInsets = NSEdgeInsets(top: 12, left: 20, bottom: 12, right: 20)
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 48).isActive = true
+        valueLabel.widthAnchor.constraint(equalTo: row.widthAnchor, multiplier: 0.55).isActive = true
         return (row, captionLabel, valueLabel, dotView)
     }
 
@@ -216,10 +220,10 @@ enum DesignTokens {
         stack.translatesAutoresizingMaskIntoConstraints = false
         card.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: card.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+            stack.topAnchor.constraint(equalTo: card.topAnchor, constant: 8),
+            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 8),
+            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -8),
+            stack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -8),
         ])
         for v in stack.arrangedSubviews {
             v.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
@@ -241,8 +245,10 @@ enum DesignTokens {
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 7
-        card.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        stack.spacing = 12
+        for view in views {
+            view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
         return stack
     }
 
@@ -251,7 +257,7 @@ enum DesignTokens {
     /// Native macOS popup — the System Settings selector for 2+ choices.
     static func popup(items: [String], selectedIndex: Int,
                       target: AnyObject?, action: Selector) -> NSPopUpButton {
-        let popup = NSPopUpButton()
+        let popup = SoftPopUpButton()
         popup.addItems(withTitles: items)
         if (0..<items.count).contains(selectedIndex) { popup.selectItem(at: selectedIndex) }
         popup.target = target
@@ -261,12 +267,11 @@ enum DesignTokens {
         return popup
     }
 
-    /// Native push button (清除 etc.) — the stock rounded bezel IS the look.
+    /// Native button behavior with a raised material capsule.
     static func pushButton(title: String, target: AnyObject?, action: Selector) -> NSButton {
-        let btn = NSButton(title: title, target: target, action: action)
-        btn.bezelStyle = .rounded
-        btn.controlSize = .small
-        btn.font = uiFont(12)
+        let btn = SoftPillButton(title: title)
+        btn.target = target
+        btn.action = action
         return btn
     }
 
@@ -337,27 +342,19 @@ enum DesignTokens {
     }
 }
 
-/// Grouped-card surface: card fill, 10-pt radius, hairline edge. Layer colours
-/// re-resolve on appearance changes (CALayer fills don't auto-track).
+/// Same-material card with enough internal margin for the soft relief edge.
 final class GroupCardView: NSView {
     init() {
         super.init(frame: .zero)
-        wantsLayer = true
         translatesAutoresizingMaskIntoConstraints = false
-        layer?.cornerRadius = DesignTokens.cardCornerRadius
-        layer?.borderWidth = 1
-        applyColors()
     }
     required init?(coder: NSCoder) { fatalError() }
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        applyColors()
+        needsDisplay = true
     }
-    private func applyColors() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = DesignTokens.Palette.card.cgColor
-            layer?.borderColor = DesignTokens.Palette.sep.cgColor
-        }
+    override func draw(_ dirtyRect: NSRect) {
+        SoftMaterial.draw(in: bounds.insetBy(dx: 4, dy: 4), radius: DesignTokens.cardCornerRadius)
     }
 }
 
@@ -406,7 +403,7 @@ final class StatusDotView: NSView {
     }
 }
 
-/// Borderless accent-text button (blue link register). `setTitle` re-titles
+/// Soft action capsule. `setTitle` re-titles
 /// without losing the styling — the dojo voice-add button relies on that.
 final class AccentTextButton: NSButton {
     private let symbol: String?
@@ -425,7 +422,7 @@ final class AccentTextButton: NSButton {
         isBordered = false
         setButtonType(.momentaryChange)
         translatesAutoresizingMaskIntoConstraints = false
-        heightAnchor.constraint(equalToConstant: 26).isActive = true
+        heightAnchor.constraint(equalToConstant: 32).isActive = true
         applyTitle()
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -437,6 +434,7 @@ final class AccentTextButton: NSButton {
     }
 
     private func applyTitle() {
+        setAccessibilityLabel(titleText)
         let text = NSMutableAttributedString()
         if let symbol,
            let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
@@ -453,6 +451,15 @@ final class AccentTextButton: NSButton {
             .kern: -0.15,
         ]))
         attributedTitle = text
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: super.intrinsicContentSize.width + 22, height: 32)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        SoftMaterial.draw(in: bounds.insetBy(dx: 3, dy: 3), radius: 13, pressed: isHighlighted)
+        super.draw(dirtyRect)
     }
 
     override func viewDidChangeEffectiveAppearance() {

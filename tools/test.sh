@@ -18,7 +18,8 @@ run_test() {
     tail -n 1 "$TEST_DIR/$name.log"
 }
 PROMPTS=(InputSa/AIServices/DojoCorrectionTable.swift InputSa/AIServices/TranscriptionMode.swift
-         InputSa/AIServices/DictationCleanupStyle.swift InputSa/Learning/UserStyleModel.swift)
+         InputSa/AIServices/DictationCleanupStyle.swift InputSa/Learning/UserStyleModel.swift
+         InputSa/AIServices/SpeechRecognitionHints.swift)
 run_test vocabulary tests/main.swift "${PROMPTS[@]}"
 run_test cleanup tests/DictationCleanupStyleTests.swift "${PROMPTS[@]}"
 run_test language tests/TranslationLanguageTests.swift InputSa/AIServices/TranslationLanguage.swift
@@ -30,6 +31,8 @@ run_test numbers tests/NumberFormatterTests.swift InputSa/AIServices/TranscriptN
 run_test selection tests/SelectionTranslateTests.swift InputSa/AIServices/SelectionTranslateDirection.swift
 run_test whisper-model tests/WhisperModelTests.swift InputSa/AIServices/ModelCatalog.swift InputSa/AIServices/WhisperAudio.swift
 run_test whisper-download tests/WhisperDownloadTests.swift InputSa/AIServices/ModelCatalog.swift InputSa/AIServices/ModelManager.swift
+run_test speech-hints tests/SpeechRecognitionHintTests.swift InputSa/AIServices/SpeechRecognitionHints.swift InputSa/AIServices/DojoCorrectionTable.swift
+run_test cli-text tests/CLITextServiceTests.swift InputSa/AIServices/CLIProcessRunner.swift InputSa/AIServices/CLITextService.swift InputSa/AIServices/APIKeyStore.swift "${PROMPTS[@]}"
 bash -n build.sh install.sh package-release.sh tools/sign-app.sh tools/prepare-whisper-runtime.sh tools/prepare-whisper-model.sh
 git diff --check
-echo "All 11 local test suites and script syntax checks passed."
+echo "All 13 local test suites and script syntax checks passed."

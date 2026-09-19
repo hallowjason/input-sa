@@ -54,7 +54,7 @@ extension PreferencesWindowController {
 
         let hint = DesignTokens.caption(
             "只統計數字，絕不儲存轉錄內容。右 ⌥ 聽寫與右 ⌘ 翻譯各計一次；" +
-            "口頭修正（右 Shift）與選字潤飾（Option＋P）不列入統計。")
+            "口頭加詞（右 Shift）與選字潤飾（Option＋P）不列入統計。")
 
         // ── Assemble ──────────────────────────────────────────
         let stack = NSStackView(views: [

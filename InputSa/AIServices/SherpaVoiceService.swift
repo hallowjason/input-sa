@@ -2,7 +2,10 @@ import Foundation
 import AVFoundation
 import AVFAudio
 
-/// Fully local voice transcription via sherpa-onnx + Paraformer (zh).
+/// Fully local transcription via sherpa-onnx SenseVoice (Paraformer fallback).
+/// Neither bundled model supports recognizer hotword prompting; generic sherpa
+/// hotwords fields are for transducer models with modified_beam_search. The
+/// vocabulary cannot repair these models' acoustic output by configuration.
 ///
 /// Push-to-talk like the cloud providers: startRecording() on keyDown,
 /// stopAndTranscribe() on keyUp. Audio is recorded as 16 kHz mono LINEAR16 WAV,

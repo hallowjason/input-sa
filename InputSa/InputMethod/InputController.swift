@@ -22,6 +22,10 @@ final class InputController: NSObject {
     private var dictationSession: DictationSession?
     private var dictationMode: TranscriptionMode = .standard
     private var dictationStyle: DictationCleanupStyle = .light
+    private var dictationPolishProvider: APIKeyStore.PolishProvider = .gemini
+    private var dictationPolishRequest: CLITextRequest?
+    private var manualPolishRequest: CLITextRequest?
+    private var manualPolishToken: UUID?
     private var dictationIsVocabulary = false
     private var dictationHistoryGeneration = UUID()
     private var currentVoiceProvider: APIKeyStore.VoiceProvider = .groq
@@ -149,6 +153,7 @@ final class InputController: NSObject {
     }
 
     func stop() {
+        cancelManualPolish()
         if let token = translationSession?.id { cancelTranslation(token: token) }
         if let token = dictationSession?.id { cancelDictation(token: token) }
         voiceService.cancelRecording()
@@ -160,11 +165,16 @@ final class InputController: NSObject {
         NotificationCenter.default.removeObserver(self)
     }
 
-    /// Keep the main run loop alive while durable history writes finish.
-    /// A synchronous drain could deadlock with UI notification observers.
+    /// Keep the main run loop alive until history is durable and CLI children
+    /// have exited. Both drains are asynchronous so UI callbacks can finish.
     func prepareToTerminate(completion: @escaping () -> Void) {
         stop()
-        historyQueue.async { DispatchQueue.main.async(execute: completion) }
+        let pending = DispatchGroup()
+        pending.enter()
+        historyQueue.async { pending.leave() }
+        pending.enter()
+        CLIProcessRunner.shutdown { pending.leave() }
+        pending.notify(queue: .main, execute: completion)
     }
 
     private func refreshShortcutCache() {
@@ -240,6 +250,10 @@ final class InputController: NSObject {
         if type == .keyDown, ownedKeyCode == kVKEscape,
            let session = dictationSession, session.isActive {
             cancelDictation(token: session.id)
+            return nil
+        }
+        if type == .keyDown, ownedKeyCode == kVKEscape, manualPolishToken != nil {
+            cancelManualPolish()
             return nil
         }
 
@@ -634,12 +648,13 @@ final class InputController: NSObject {
         dictationHistoryGeneration = TranscriptHistoryStore.shared.generation
         dictationIsVocabulary = correction
         dictationMode = TranscriptionMode.activePolishMode
+        dictationPolishProvider = APIKeyStore.shared.polishProvider
         dictationStyle = TranscriptionMode.activePolishModeName == nil ? DictationCleanupStyle.selected : .structured
         dictationHUD.onCancel = { [weak self] in self?.cancelDictation(token: token) }
         peakRecordedLevel = 0
         recordingStartTime = Date()   // unified start for usage-stats duration
         recordingTargetElement = focusedElement()  // snapshot before HUD steals focus
-        if APIKeyStore.shared.polishProvider == .apple {
+        if dictationPolishProvider == .apple {
             ApplePolishService.shared.prewarm()  // wake the local model while the user speaks
         }
         // Mute the speaker while recording so its output can't echo back into the
@@ -1022,6 +1037,8 @@ final class InputController: NSObject {
     private func cancelDictation(token: UUID) {
         guard dictationSession?.id == token, dictationSession?.isActive == true else { return }
         dictationSession?.cancel(token: token)
+        dictationPolishRequest?.cancel()
+        dictationPolishRequest = nil
         voiceService.cancelRecording()
         voiceService.onPartialText = nil
         recordingStartTime = nil
@@ -1109,26 +1126,33 @@ final class InputController: NSObject {
     }
 
     /// One switch, two call sites (dictation polish + Option+P): route to the
-    /// user's chosen polish provider. Both services share the same
+    /// user's chosen polish provider. All services share the same
     /// `Result<String,Error>` main-thread completion, so the caller's post-pass
     /// and logging are provider-agnostic.
+    @discardableResult
     private func dispatchPolish(
         text: String,
         mode: TranscriptionMode,
+        provider: APIKeyStore.PolishProvider,
         priorContext: String? = nil,
         onPartial: ((String) -> Void)? = nil,
         completion: @escaping (Result<String, Error>) -> Void
-    ) {
-        switch APIKeyStore.shared.polishProvider {
+    ) -> CLITextRequest? {
+        switch provider {
         case .apple:
             // Apple's on-device 3B is deliberately NOT given prior context: extra
             // prompt length feeds its 詞彙表膨脹幻覺 (short input → invented output).
-            // v1 keeps prior context Gemini-only; `priorContext` is dropped here.
+            // The local provider drops prior context here.
             ApplePolishService.shared.enhance(text: text, mode: mode,
                                               onPartial: onPartial, completion: completion)
+            return nil
         case .gemini:
             GeminiPolishService.shared.enhance(text: text, mode: mode, priorContext: priorContext,
                                                onPartial: onPartial, completion: completion)
+            return nil
+        case .codex, .claude:
+            return CLITextService.shared.enhance(text: text, mode: mode, provider: provider,
+                priorContext: priorContext, completion: completion)
         }
     }
 
@@ -1170,21 +1194,21 @@ final class InputController: NSObject {
             completeDictation(text: transcript, aiText: nil, token: token)
             return
         }
-        let provider = APIKeyStore.shared.polishProvider
-        // Gemini needs a key; Apple is local and needs none.
+        let provider = dictationPolishProvider
+        // Gemini uses an API key; CLI providers use their existing login.
         if provider == .gemini, APIKeyStore.shared.geminiKey.isEmpty {
             completeDictation(text: transcript, aiText: nil,
                               fallbackReason: "未設定 Gemini，已保留辨識原文", token: token)
             return
         }
-        let providerTag = provider == .apple ? "Apple" : "Gemini"
-        let baseLabel = provider == .apple ? "AI 潤飾中（本地）" : "AI 潤飾中"
-        dictationHUD.setStatus("\(baseLabel) · \(dictationStyle.title)")
+        let providerTag = provider.displayName
+        dictationHUD.setStatus("\(providerTag) 整理中 · \(dictationStyle.title)")
         debugLog("polish started (\(providerTag), \(transcript.count) chars)")
-        dispatchPolish(
+        dictationPolishRequest = dispatchPolish(
             text: transcript,
             mode: dictationMode,
-            // Prior context is Gemini-only (Apple 3B hallucination risk); compute
+            provider: provider,
+            // Cloud providers can use prior context (Apple 3B omits it); compute
             // before this utterance is recorded so it never sees itself.
             priorContext: provider == .apple ? nil : priorContextForPolish(),
             onPartial: { [weak self] partial in
@@ -1198,6 +1222,7 @@ final class InputController: NSObject {
             DispatchQueue.main.async {
                 guard let self = self, self.dictationSession?.id == token,
                       self.dictationSession?.phase == .polishing else { return }
+                self.dictationPolishRequest = nil
                 switch result {
                 case .success(let polished):
                     // Vocabulary is AI reference context only; no global term replacement.
@@ -1241,6 +1266,7 @@ final class InputController: NSObject {
         activeModifierHoldAction != nil || activeKeyHoldAction != nil || qaKeyRecording
             || translationSession?.isActive == true
             || dictationSession?.isActive == true
+            || manualPolishToken != nil
     }
 
     /// Brief non-blocking HUD toast (e.g. "沒有選取文字"), auto-hidden after 1.2 s.
@@ -1260,20 +1286,36 @@ final class InputController: NSObject {
 
     // MARK: - Manual Text Polish (Option+P or custom shortcut)
     private func triggerManualPolish() {
+        // Press actions are queued on main; another action can become active
+        // after the event callback's earlier busy check.
+        guard !isAnyRecordingActive else { return }
         guard let text = SelectionReader.read() else {
             flashHUDMessage("沒有選取文字")
             return
         }
 
-        dispatchPolish(text: text,
-                       mode: TranscriptionMode.activePolishMode) { [weak self] result in
+        let token = UUID()
+        let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let provider = APIKeyStore.shared.polishProvider
+        manualPolishToken = token
+        voiceHUD.show(state: .processing("整理中 · Esc 取消"), near: getCursorRect(), on: NSScreen.main)
+        manualPolishRequest = dispatchPolish(text: text,
+                       mode: TranscriptionMode.activePolishMode, provider: provider) { [weak self] result in
             DispatchQueue.main.async {
-                guard let self = self else { return }
+                guard let self = self, self.manualPolishToken == token else { return }
+                self.manualPolishToken = nil
+                self.manualPolishRequest = nil
+                self.voiceHUD.hide()
                 switch result {
                 case .success(let enhanced):
                     // Match dictation's number formatting, then preview without
                     // replacing terms from the reference vocabulary.
                     let final = TranscriptNumberFormatter.format(enhanced)
+                    guard targetPID == NSWorkspace.shared.frontmostApplication?.processIdentifier else {
+                        self.keepInClipboard(final)
+                        self.flashHUDMessage("已切換 App：整理結果已複製")
+                        return
+                    }
                     self.polishPreview.startPreview(original: text, enhanced: final)
                     self.showPolishHUD(final)
                 case .failure(let err):
@@ -1281,6 +1323,14 @@ final class InputController: NSObject {
                 }
             }
         }
+    }
+
+    private func cancelManualPolish() {
+        guard manualPolishToken != nil else { return }
+        manualPolishToken = nil
+        manualPolishRequest?.cancel()
+        manualPolishRequest = nil
+        voiceHUD.hide()
     }
 
     // MARK: - Polish Preview HUD

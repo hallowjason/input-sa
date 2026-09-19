@@ -1,3 +1,30 @@
+# Session Context — 2026-09-19 v3.1 待安裝發布
+
+## 上次完成
+- v3.0.0 已安裝並發布，歷史紀錄保留於下方。
+- 使用者要求整套偏好設定跟進 Talky 風格、中英辨識改善，並明確同意新增可自行選擇的 Codex／Claude 文字整理。
+- 新增有限詞庫／Codex、Claude 拼寫提示，不做 cloud/code 同音全域替換；SenseVoice 不支援聲學提示，不能宣稱準確率已提升。
+- Gemini 三句合成測試通過：保留英文原詞，明確語境可還原音譯。Whisper TTS A/B 未穩定恢復英文名稱。
+- Codex／Claude 最終真實固定句連線均通過（約 5.42／3.83 秒），不使用私人詞庫或口述。乾淨環境必須保留 USER/LOGNAME 才能找到既有 Claude Keychain 登入。
+- Codex 0.154.0 官方模型目錄與停用工具設定已用 localhost 假 provider 驗證 tools=[]；CLI 均限個人未受管理環境，具有取消、逾時及退出程序排空。
+
+## 待辦 / 未完成
+- 使用者指出的長文字截斷、分頁圖示偏位、角色選單內距、快捷鍵對齊均已修正，30 組尺寸／淺深色檢查及原生長文字、選單／取消操作通過。
+- 13 套隔離測試、364 項檢查、最終獨立審查與完整 macOS build 通過。
+- 使用者追加工作路徑減量要求：3.2 GB 多為 build 產物；已確認 Whisper 開發副本與正式安裝模型相同。發布／安裝後清可再生 build 與已有發布附件的 ZIP，保留獨有 Paraformer 備份及原始模型。
+- v3.1.0/build 11 尚未安裝、提交、推送或發布。站立授權已包含完整翻修／上線／安裝。
+
+## 重要決策與限制
+- 既有 voiceProvider=sherpa、polishProvider=gemini 保持不變。CLI 只接文字整理，翻譯/劃詞問答/口頭加詞仍 Gemini。
+- 不重設 TCC、不換固定簽章；不動原有 untracked design-refs/。
+- tasks/todo.md、tasks/release-v3.1.0.md 與 tasks/lessons.md 保存本次進度；stop hook 可能再次覆蓋此檔，提交前務必保留歷史。
+
+## 下次繼續
+cd /Users/gooo/Desktop/.claude/projects/input-sa
+# 先看最新工作樹與本段，完成安裝、v3.1.0 發布與工作資料夾減量。
+
+---
+
 # Session Context — 2026-09-19
 
 ## 上次完成

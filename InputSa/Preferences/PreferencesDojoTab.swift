@@ -28,7 +28,7 @@ extension PreferencesWindowController {
         footer.alignment = .centerY
         footer.spacing = 10
         footer.edgeInsets = NSEdgeInsets(top: 4, left: 10, bottom: 4, right: 16)
-        footer.heightAnchor.constraint(equalToConstant: 40).isActive = true
+        footer.heightAnchor.constraint(greaterThanOrEqualToConstant: 40).isActive = true
 
         let listCard = DesignTokens.groupCard([dojoCardList, footer])
 
@@ -40,7 +40,7 @@ extension PreferencesWindowController {
         // Transient, non-blocking share feedback (kept empty/hidden until a submit
         // resolves) — deliberately not an NSAlert, so a failed share never
         // interrupts the user.
-        dojoShareStatusLabel = NSTextField(labelWithString: "")
+        dojoShareStatusLabel = WrappingTextField("")
         dojoShareStatusLabel.font = DesignTokens.uiFont(11, weight: .semibold)
         dojoShareStatusLabel.isHidden = true
 
@@ -48,12 +48,13 @@ extension PreferencesWindowController {
         let stack = NSStackView(views: [
             dojoShareStatusLabel,
             DesignTokens.group(title: "詞條", card: listCard, footnote: hintLabel),
+            makeCommunityPreferencesSection(),
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = DesignTokens.Spacing.section
         stack.setCustomSpacing(7, after: dojoShareStatusLabel)
-        for group in stack.arrangedSubviews where !(group is NSTextField) {
+        for group in stack.arrangedSubviews {
             group.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
 

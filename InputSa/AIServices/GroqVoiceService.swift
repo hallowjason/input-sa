@@ -153,15 +153,13 @@ final class GroqVoiceService: NSObject, VoiceServiceProtocol {
             body += "--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".utf8Data
         }
         field("model",           "whisper-large-v3-turbo")
-        // Pinned to "zh" (not auto-detect): logs show Whisper already emits the
-        // embedded English (commit/cloud/GitHub) as Latin text under a zh hint, so
-        // 中英夾雜 is covered without opening the door to whole-utterance language
-        // misdetection on the primary dictation path. Revisit only with real-world
-        // testing if English recall proves insufficient.
+        // Keep the existing primary-language hint; proper-name spellings are
+        // request context, not a guarantee of code-switching accuracy.
         field("language",        "zh")
         field("response_format", "json")
-        // prompt: 給 Whisper 一個真實的語境提示，大幅降低無聲/安靜時的幻覺輸出
-        field("prompt",          "以下是繁體中文口語錄音，請精確轉錄說話者說的內容。")
+        // Whisper prompts guide spelling/context, not chat-style instructions.
+        field("prompt", SpeechRecognitionHints.groqPrompt(vocabulary:
+            DojoCorrectionTable.shared.preferredTerms(for: "", maxTerms: 40, maxCharacters: 800)))
 
         body += "--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".utf8Data
         body += audioData
