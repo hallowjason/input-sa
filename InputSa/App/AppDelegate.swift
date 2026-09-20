@@ -141,9 +141,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         todayItem.isEnabled = false
         todaySummaryItem = todayItem
         menu.addItem(todayItem)
-        menu.addItem(withTitle: "語音輸入：長按右 Option 錄音，放開後自動輸出", action: nil, keyEquivalent: "")
-        menu.addItem(withTitle: "語音翻譯：長按右 Command 說中文，放開後輸出翻譯", action: nil, keyEquivalent: "")
-        menu.addItem(withTitle: "劃詞問答：選字後長按 Ctrl+Option+Q 說問題，浮窗顯示答案", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "語音輸入：點按右 Option 開始，再按一下結束並輸出", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "語音翻譯：點按右 Command 開始，再按一下看原文、選語言", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "劃詞問答：選字後按 Ctrl+Option+Q 開始，再按一下顯示答案", action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "劃詞翻譯：選字後按 Ctrl+Option+T，浮窗顯示譯文", action: nil, keyEquivalent: "")
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "系統診斷...", action: #selector(runDiagnostics), keyEquivalent: "")

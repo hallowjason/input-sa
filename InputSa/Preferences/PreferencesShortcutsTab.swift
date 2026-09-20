@@ -1,8 +1,8 @@
 import AppKit
 
 /// 快捷鍵 pane — every one of the seven actions is now user-rebindable. Each row
-/// pairs the action's name + description with a `ShortcutRecorderView`; a hold
-/// action shows a muted「長按」hint. A reset button restores all defaults, and a
+/// pairs the action's name + description with a `ShortcutRecorderView`; a recording
+/// action shows a muted「切換」hint. A reset button restores all defaults, and a
 /// warning line flags conflicts or an unmodified bare key that would fire during
 /// normal typing.
 extension PreferencesWindowController {
@@ -19,7 +19,7 @@ extension PreferencesWindowController {
             }
             shortcutRecorders[action] = recorder
             return DesignTokens.row(title: action.titleZh, subtitle: action.subtitleZh,
-                                    control: recorderControl(recorder, hold: action.isHold))
+                                    control: recorderControl(recorder, hold: action.isRecordingAction))
         }
         let shortcutCard = DesignTokens.groupCard(shortcutRows)
 
@@ -30,7 +30,7 @@ extension PreferencesWindowController {
         resetRow.alignment = .centerY
 
         let hint = DesignTokens.caption(
-            "點任一格 → 按下想要的鍵。長按型（聽寫／翻譯／口頭加詞／劃詞問答）可只按單顆修飾鍵（如右 ⌥）；按 ⎋ 取消錄製。")
+            "錄音功能：按一下開始，再按一下結束；按 Esc 取消。點快捷鍵欄位可自訂按鍵，也可使用單顆修飾鍵（如右 ⌥）。")
 
         // Conflict / unmodified-key warning (hidden unless something needs attention).
         shortcutWarningLabel = WrappingTextField("")
@@ -39,11 +39,8 @@ extension PreferencesWindowController {
         shortcutWarningLabel.preferredMaxLayoutWidth = DesignTokens.contentWidth - 8
         shortcutWarningLabel.isHidden = true
 
-        // ── Group 2: 外觀與語言 ───────────────────────────────
+        // ── Group 2: 錄音面板外觀 ─────────────────────────────
         let appearanceCard = DesignTokens.groupCard([
-            DesignTokens.row(title: "預設翻譯語言",
-                             subtitle: "翻譯面板可直接選語言，各 App 會記住上次的選擇",
-                             control: makeTranslatePopUp()),
             DesignTokens.row(title: "HUD 神佛角色", control: makeCharacterPopUp()),
         ])
 
@@ -62,7 +59,7 @@ extension PreferencesWindowController {
 
         let stack = NSStackView(views: [
             shortcutGroup,
-            DesignTokens.group(title: "外觀與語言", card: appearanceCard),
+            DesignTokens.group(title: "錄音面板外觀", card: appearanceCard),
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -76,10 +73,10 @@ extension PreferencesWindowController {
         return stack
     }
 
-    /// Recorder + optional muted「長按」hint for hold (push-to-talk) actions.
+    /// Recorder + optional muted「切換」hint for start/stop recording actions.
     private func recorderControl(_ recorder: ShortcutRecorderView, hold: Bool) -> NSView {
         let holdLabel = DesignTokens.styledLabel(
-            hold ? "長按" : "", size: 11, weight: .regular, kern: -0.1,
+            hold ? "切換" : "", size: 11, weight: .regular, kern: -0.1,
             color: DesignTokens.Palette.inkMuted(0.35))
         let cluster = NSStackView(views: [recorder, holdLabel])
         cluster.orientation = .horizontal
@@ -135,20 +132,6 @@ extension PreferencesWindowController {
         updateShortcutWarning()
     }
 
-    /// Common translate targets. Gemini's translate prompt takes this string
-    /// verbatim (see TranscriptionMode.swift) so any language name works —
-    /// this list is just the curated set exposed in the popup.
-    static var translateLanguages: [String] { TranslationLanguage.targets.map(\.promptName) }
-
-    private func makeTranslatePopUp() -> NSPopUpButton {
-        let saved = TranscriptionMode.translateTargetLanguage
-        translatePopUp = DesignTokens.popup(
-            items: Self.translateLanguages,
-            selectedIndex: Self.translateLanguages.firstIndex(of: saved) ?? 0,
-            target: self, action: #selector(translateLangChanged))
-        return translatePopUp
-    }
-
     private func makeCharacterPopUp() -> NSPopUpButton {
         DesignTokens.popup(
             items: HUDCharacter.allCases.map { $0.displayName },
@@ -162,8 +145,4 @@ extension PreferencesWindowController {
         HUDCharacter.current = HUDCharacter.allCases[idx]
     }
 
-    @objc private func translateLangChanged() {
-        let lang = translatePopUp?.titleOfSelectedItem ?? "英文"
-        TranscriptionMode.translateTargetLanguage = lang
-    }
 }

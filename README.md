@@ -1,16 +1,16 @@
 # Input-sa
 
-macOS 語音輸入法。按住右 Option 錄音，放開後自動轉成文字、用 AI 潤飾排版，直接貼到游標所在位置。
+macOS 語音輸入法。點按右 Option 開始錄音，再按一下結束並轉成文字、用 AI 潤飾排版，直接貼到游標所在位置。
 
-v3.1 將偏好設定改為柔和圓角與一般／進階分組，新增可選 Codex／Claude 文字整理，補上中英夾雜的專有名詞提示；保留本地 Whisper、觀音錄音面板、三種整理強度與原稿紀錄。支援 Apple Silicon Mac；主程式最低 macOS 12，本地 Whisper 需 macOS 14 以上，Apple 本地整理需 macOS 26 與 Apple Intelligence。[本版變更](tasks/release-v3.1.1.md)
+v3.2 改成單層偏好導覽與點按兩次錄音，翻譯先看原文再選語言，輸出譯文與括號中文；可選 Codex／Claude 文字整理，支援中英專名提示；保留本地 Whisper、觀音錄音面板、三種整理強度與原稿紀錄。支援 Apple Silicon Mac；主程式最低 macOS 12，本地 Whisper 需 macOS 14 以上，Apple 本地整理需 macOS 26 與 Apple Intelligence。[本版變更](tasks/release-v3.2.0.md)
 
 ## 快速安裝
 
 1. 到 [Releases](../../releases) 頁面下載最新的 `Input-sa-vX.Y.Z.zip`，解壓縮後把 `Input-sa.app` 拖進「應用程式」資料夾。
 2. **第一次開啟會被 Gatekeeper 擋下**（因為不是從 App Store 或付費開發者憑證簽的）：在「應用程式」裡對 `Input-sa.app` **按右鍵 → 打開**，跳出的警告視窗再按一次「打開」即可，之後正常雙擊就能開。
 3. 系統會跳出「輔助使用功能」授權請求 → 前往 **系統設定 → 隱私權與安全性 → 輔助使用功能**，開啟 `Input-sa`。
-4. 選單列圖示 → **偏好設定**（或按 `Ctrl+Option+P`）→「進階 → 語音服務」選擇引擎。雲端服務填入自己的 API Key；本地 Whisper 可從「管理模型…」下載，無需語音 API Key。
-5. 完成！在任何輸入框按住右 Option 說話，放開後文字就會自動出現。
+4. 選單列圖示 → **偏好設定**（或按 `Ctrl+Option+P`）→「語音與整理」選擇引擎。雲端服務填入自己的 API Key；本地 Whisper 可從「管理模型…」下載，無需語音 API Key。
+5. 完成！在任何輸入框點按右 Option 開始說話，再按一下結束，文字整理後就會出現。
 
 想開機自動啟動：**系統設定 → 一般 → 登入項目與延伸功能** → 點 `+` 選擇 `Input-sa.app`。
 
@@ -23,7 +23,7 @@ Key 儲存在這台 Mac 的系統 Keychain，只用於對應服務的請求驗�
 
 ## 選擇文字整理服務
 
-「偏好設定 → 進階 → 語音服務 → 用什麼整理」可選 Gemini、Apple 本地、Codex CLI 或 Claude Code。此選項用於口述整理與選字潤飾；翻譯、劃詞問答與口頭加詞仍使用 Gemini。升級保留原本選擇，點選 CLI 不會自動安裝或登入。
+「偏好設定 → 語音與整理 → 用什麼整理」可選 Gemini、Apple 本地、Codex CLI 或 Claude Code。此選項用於口述整理與選字潤飾；翻譯、劃詞問答與口頭加詞仍使用 Gemini。升級保留原本選擇，點選 CLI 不會自動安裝或登入。
 
 Codex／Claude 需先在這台 Mac 安裝對應官方 CLI，並在終端機完成登入。設定內的「已找到 CLI」只表示找到執行檔；按「測試連線」才會送出一段內建測試句，確認登入及文字處理可用。CLI 使用自己的服務帳號與額度，仍屬雲端文字整理，並非離線辨識模型。
 
@@ -33,9 +33,9 @@ Codex／Claude 需先在這台 Mac 安裝對應官方 CLI，並在終端機完�
 
 ## 本地辨識與模型管理
 
-「語音服務」→「管理模型…」下載 Whisper large-v3-turbo（約 1.6 GB）。下載支援暫停續傳，通過大小與 SHA-256 驗證後才可使用；模型存於 `~/Library/Application Support/InputSa/models/`，升級 App 不必重新下載。完成後選「本地 Whisper Turbo」。
+「語音與整理」→「管理模型…」下載 Whisper large-v3-turbo（約 1.6 GB）。下載支援暫停續傳，通過大小與 SHA-256 驗證後才可使用；模型存於 `~/Library/Application Support/InputSa/models/`，升級 App 不必重新下載。完成後選「本地 Whisper Turbo」。
 
-Whisper 錄音時定期顯示尾段的暫時字幕，放開後重新辨識完整錄音；暫時字幕不當作最終輸出。Groq／Google／既有 SenseVoice 於停止後顯示辨識結果。
+Whisper 錄音時定期顯示尾段的暫時字幕，結束後重新辨識完整錄音；暫時字幕不當作最終輸出。Groq／Google／既有 SenseVoice 於停止後顯示辨識結果。
 
 原有 SenseVoice／Paraformer 支援保留。本機從原始碼建置會包含原有模型；公開 zip 不包含大型模型，可在 App 內下載 Whisper。不要修改已簽章 App 內部檔案。語音與整理服務各自選擇；完全離線可搭配「原文」或可用的 Apple 本地整理。
 
@@ -51,15 +51,28 @@ Whisper 錄音時定期顯示尾段的暫時字幕，放開後重新辨識完整
 
 ## 字詞庫
 
-「字詞庫」分頁統一管理人名、專有名詞與常用字詞，以編號列出，說話時不必切換道場模式。可以手動新增，或按住右 Shift「口頭加詞」、確認後儲存；現有詞條會保留。
+「字詞庫」分頁統一管理人名、專有名詞與常用字詞，以編號列出，說話時不必切換道場模式。可以手動新增，或點按右 Shift 開始「口頭加詞」，再按一下結束、確認後儲存；現有詞條會保留。
 
 詞庫提供給 AI 作為拼寫參考，本地 Whisper、Groq 與 Google STT 也會收到限量的專有名詞辨識提示，包括 Codex／Claude 的拼寫；不對全文強制做同音替換。詞多時，與本句明確相關的詞優先進入 AI 提示。舊的 `tier`、`phonetic` 欄位與 `dojo_corrections.json` 路徑保留以相容存檔，不再代表模式或自動替換規則。
 
 ## 翻譯面板與自然改口
 
-按住翻譯快捷鍵（預設右 Command）說話，面板提供英、日、韓、泰、越南、印尼、西班牙、法文八種語言。點語言即可結束錄音並翻譯；放開快捷鍵則使用已選語言。每個 App 會記住上次選擇，未選過的 App 使用偏好設定中的預設語言。取消後不貼字；若處理期間切到其他 App，結果留在剪貼簿並顯示提示。
+點按翻譯快捷鍵（預設右 Command）開始錄音，再按一下結束；也可點面板的「結束錄音」。辨識完成後先顯示中文原文，所有語言都未預選，必須明確點選英、日、韓、泰、越南、印尼、西班牙或法文，才開始翻譯並送出。錄音與辨識中不可選語言；等待選擇時可按 Esc 或取消。
+
+送出的整段內容為譯文在上、面板顯示的中文原文在下，包一組半形括號；程式直接組合，沒有額外的回譯請求。例如：
+
+```text
+Today's weather is good.
+(今天天氣很好)
+```
+
+取消後不貼字；若處理期間切到其他 App，完整雙語文字留在剪貼簿並顯示提示。語音聽寫、翻譯、口頭加詞及劃詞問答均採第一次點按開始、第二次點按結束；原自訂快捷鍵保留。單獨修飾鍵需按下再放開才算一次點按，搭配其他按鍵或滑鼠時維持原本操作。
 
 同一段錄音中可直接改口，例如「明天下午三點開會，啊不對，是四點，地點在二樓」。AI 整理／翻譯會依明確的改口標記，保留更正後的時間與其他資訊。一般否定句和引用不應被當成改口。這個功能需要 AI 處理；若 AI 不可用而退回原稿，仍可能保留完整改口過程。它不會回頭改動上一次已貼出的文字。
+
+## 會議紀錄規劃
+
+錄音檔匯入、完整逐字稿、講者區分與即時會議轉錄／潤稿的設計見[會議紀錄規劃](tasks/meeting-transcription-plan.md)。建議依序完成檔案轉錄、講者與摘要、即時會議；目前版本尚未提供這些會議功能。
 
 ## 給想自己編譯的人
 
@@ -72,7 +85,7 @@ cd input-sa
 ./install.sh
 ```
 
-本地測試：`bash tools/test.sh`（13 套隔離測試，不讀個人資料或使用麥克風）。重新建立 Whisper：`bash tools/prepare-whisper-runtime.sh`；模型下載工具：`bash tools/prepare-whisper-model.sh`。真實音訊測試見 `tests/WhisperRuntimeTests.swift`。
+本地測試：`bash tools/test.sh`（14 套隔離測試，不讀個人資料或使用麥克風）。重新建立 Whisper：`bash tools/prepare-whisper-runtime.sh`；模型下載工具：`bash tools/prepare-whisper-model.sh`。真實音訊測試見 `tests/WhisperRuntimeTests.swift`。
 
 日常編譯直接使用 `vendor/whisper/` 的現成引擎，不必重抓 CMake 或重編 whisper.cpp。模型工具預設重用 App 的 `~/Library/Application Support/InputSa/models/`，經相同 SHA-256 驗證後直接使用；需要隔離測試時仍可明確傳入另一個目錄。`build/` 是可重建的輸出與開發暫存；已完成安裝與發布後可清除，原始碼、`vendor/` 的引擎／函式庫與 `InputSa/Resources/model/` 的本地模型要保留。
 

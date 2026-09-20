@@ -24,6 +24,7 @@ run_test vocabulary tests/main.swift "${PROMPTS[@]}"
 run_test cleanup tests/DictationCleanupStyleTests.swift "${PROMPTS[@]}"
 run_test language tests/TranslationLanguageTests.swift InputSa/AIServices/TranslationLanguage.swift
 run_test translation tests/TranslationSessionTests.swift InputSa/InputMethod/TranslationSession.swift
+run_test shortcut-taps tests/ShortcutTapGestureTests.swift InputSa/InputMethod/ShortcutTapGesture.swift
 run_test dictation tests/DictationSessionTests.swift InputSa/InputMethod/DictationSession.swift InputSa/AIServices/VoiceServiceProtocol.swift
 run_test protocol tests/VoiceServiceProtocolTests.swift InputSa/AIServices/VoiceServiceProtocol.swift
 run_test history tests/TranscriptHistoryTests.swift InputSa/AIServices/TranscriptHistoryStore.swift
@@ -35,4 +36,4 @@ run_test speech-hints tests/SpeechRecognitionHintTests.swift InputSa/AIServices/
 run_test cli-text tests/CLITextServiceTests.swift InputSa/AIServices/CLIProcessRunner.swift InputSa/AIServices/CLITextService.swift InputSa/AIServices/APIKeyStore.swift "${PROMPTS[@]}"
 bash -n build.sh install.sh package-release.sh tools/sign-app.sh tools/prepare-whisper-runtime.sh tools/prepare-whisper-model.sh
 git diff --check
-echo "All 13 local test suites and script syntax checks passed."
+echo "All 14 local test suites and script syntax checks passed."

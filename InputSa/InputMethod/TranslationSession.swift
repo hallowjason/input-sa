@@ -1,9 +1,10 @@
 import Foundation
 
 /// Main-thread translation lifecycle, independent of microphone and keyboard APIs.
-/// The original app and language belong to one recording; callbacks must carry its id.
+/// The source must be visible before an explicit language choice can translate it.
+/// The original app belongs to one recording; callbacks must carry its id.
 struct TranslationSession {
-    enum Phase { case recording, transcribing, translating, ready, completed, cancelled }
+    enum Phase { case recording, transcribing, awaitingLanguage, translating, ready, completed, cancelled }
     enum Destination { case originalApp, clipboard }
     struct Delivery {
         let text: String
@@ -13,23 +14,25 @@ struct TranslationSession {
     let id = UUID()
     let appID: String?
     let processID: Int32?
-    private(set) var language: String
+    private(set) var language: String?
+    private(set) var sourceText: String?
     private(set) var phase: Phase = .recording
     private(set) var holdReleased = false
     private(set) var durationMs = 0
-    private var result: String?
+    private(set) var outputText: String?
 
-    init(appID: String?, processID: Int32?, language: String) {
+    init(appID: String?, processID: Int32?) {
         self.appID = appID
         self.processID = processID
-        self.language = language
     }
 
     var isActive: Bool { phase != .completed && phase != .cancelled }
 
     mutating func selectLanguage(_ language: String, token: UUID) -> Bool {
-        guard token == id, phase == .recording, !language.isEmpty else { return false }
-        self.language = language
+        let trimmed = language.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard token == id, phase == .awaitingLanguage, !trimmed.isEmpty else { return false }
+        self.language = trimmed
+        phase = .translating
         return true
     }
 
@@ -45,16 +48,21 @@ struct TranslationSession {
         holdReleased = true
     }
 
-    mutating func beginTranslation(token: UUID) -> Bool {
-        guard token == id, phase == .transcribing else { return false }
-        phase = .translating
+    mutating func finishTranscription(text: String, token: UUID) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard token == id, phase == .transcribing, !trimmed.isEmpty else { return false }
+        sourceText = trimmed
+        phase = .awaitingLanguage
         return true
     }
 
     mutating func finish(text: String, token: UUID) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard token == id, phase == .translating, !trimmed.isEmpty else { return false }
-        result = trimmed
+        guard token == id, phase == .translating, !trimmed.isEmpty,
+              let sourceText else { return false }
+        // Assemble locally: the lower block is exactly the previewed source,
+        // never a model-generated back-translation or an extra API request.
+        outputText = "\(trimmed)\n(\(sourceText))"
         phase = .ready
         return true
     }
@@ -62,7 +70,8 @@ struct TranslationSession {
     @discardableResult
     mutating func cancel(token: UUID) -> Bool {
         guard token == id, isActive else { return false }
-        result = nil
+        sourceText = nil
+        outputText = nil
         phase = .cancelled
         return true
     }
@@ -71,9 +80,10 @@ struct TranslationSession {
     /// A missing target or changed process never receives a synthetic paste.
     mutating func takeDelivery(token: UUID, frontmostPID: Int32?, modifiersReleased: Bool) -> Delivery? {
         guard token == id, phase == .ready, holdReleased, modifiersReleased,
-              let text = result else { return nil }
+              let text = outputText else { return nil }
         phase = .completed
-        result = nil
+        sourceText = nil
+        outputText = nil
         let sameApp = processID != nil && processID == frontmostPID
         return Delivery(text: text, destination: sameApp ? .originalApp : .clipboard)
     }

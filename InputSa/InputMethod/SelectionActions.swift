@@ -8,19 +8,22 @@ import AppKit
 /// AnswerPanel WITHOUT injecting anything into the user's document.
 extension InputController {
 
-    // MARK: - 劃詞問答 (⌃⌥Q, hold to speak)
+    // MARK: - 劃詞問答 (⌃⌥Q, tap to start/stop)
 
-    /// Q went down: capture the selection now (before the mic opens), then start
+    /// First tap: capture the selection now (before the mic opens), then start
     /// recording the spoken question. No selection ⇒ a brief toast, no recording.
-    /// Returns whether recording actually started, so the generic hold dispatch
+    /// Returns whether recording actually started, so the recording dispatcher
     /// can clear its active-action state when this bails out early.
     @discardableResult
     func startSelectionQA() -> Bool {
+        guard qaSessionToken == nil else { return false }
         guard let selection = SelectionReader.read() else {
             flashHUDMessage("沒有選取文字")
             return false
         }
         guard micReadyOrExplain() else { return false }
+        let token = UUID()
+        qaSessionToken = token
         qaSelectedText = selection
         qaKeyRecording = true
         peakRecordedLevel = 0
@@ -32,23 +35,26 @@ extension InputController {
         }
         voiceService.onLevelUpdate = { [weak self] level in
             DispatchQueue.main.async {
-                guard let self = self else { return }
+                guard let self = self, self.qaSessionToken == token, self.qaKeyRecording else { return }
                 self.peakRecordedLevel = max(self.peakRecordedLevel, level)
                 self.voiceHUD.updateAudioLevel(level)
             }
         }
+        voiceService.onPartialText = nil
         voiceService.startRecording()
-        voiceHUD.recordingCaption = "問題錄音中"
+        voiceHUD.recordingCaption = "問題錄音中 · 再按一下結束"
         voiceHUD.show(state: .recording, near: selectionActionCursor ?? getCursorRect(),
                       on: NSScreen.main)
         return true
     }
 
-    /// Q released: stop recording, transcribe the question, ask Gemini, show the
+    /// Second tap: stop recording, transcribe the question, ask Gemini, show the
     /// answer. QA hard-routes to Gemini (like translation / 口頭修正) — no Gemini
     /// key means a toast, never a silent fallback to another provider.
     func finishSelectionQA() {
+        guard let token = qaSessionToken, qaKeyRecording else { return }
         qaKeyRecording = false
+        let peak = peakRecordedLevel
         let selection = qaSelectedText ?? ""
         qaSelectedText = nil
         SystemAudioMute.shared.endMute()
@@ -57,37 +63,54 @@ extension InputController {
         voiceHUD.setState(.processing("轉錄中…"))
         voiceService.stopAndTranscribe { [weak self] result in
             DispatchQueue.main.async {
-                guard let self = self else { return }
+                guard let self = self, self.qaSessionToken == token else { return }
                 switch result {
                 case .failure:
+                    self.qaSessionToken = nil
                     self.voiceHUD.hide()
                     self.flashHUDMessage("轉錄失敗，請再試一次")
                 case .success(let transcript):
                     let question = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard question.count >= 2 else {
+                    guard question.count >= 2, peak >= 0.02 else {
+                        self.qaSessionToken = nil
                         self.voiceHUD.hide()
                         self.flashHUDMessage("沒聽清楚問題")
                         return
                     }
                     guard !APIKeyStore.shared.geminiKey.isEmpty else {
+                        self.qaSessionToken = nil
                         self.voiceHUD.hide()
                         self.flashHUDMessage("劃詞問答需要 Gemini API Key")
                         return
                     }
-                    self.askSelectionQuestion(selection: selection, question: question)
+                    self.askSelectionQuestion(selection: selection, question: question, token: token)
                 }
             }
         }
     }
 
-    private func askSelectionQuestion(selection: String, question: String) {
+    func cancelSelectionQA() {
+        guard qaSessionToken != nil else { return }
+        qaSessionToken = nil
+        invalidateRecordingTaps()
+        voiceService.cancelRecording()
+        qaKeyRecording = false
+        qaSelectedText = nil
+        recordingStartTime = nil
+        SystemAudioMute.shared.endMute()
+        voiceHUD.hide()
+    }
+
+    private func askSelectionQuestion(selection: String, question: String, token: UUID) {
+        guard qaSessionToken == token else { return }
         voiceHUD.setState(.processing("思考中…"))
-        inputSaLog("qa ask: q=\(String(question.prefix(60))) sel=\(selection.count) chars")
+        inputSaLog("qa ask: question=\(question.count) chars, selection=\(selection.count) chars")
         GeminiPolishService.shared.enhance(
             text: question, mode: .qa(selectedText: selection)
         ) { [weak self] result in
             DispatchQueue.main.async {
-                guard let self = self else { return }
+                guard let self = self, self.qaSessionToken == token else { return }
+                self.qaSessionToken = nil
                 self.voiceHUD.hide()
                 switch result {
                 case .success(let answer):

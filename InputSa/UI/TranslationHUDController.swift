@@ -2,23 +2,33 @@ import AppKit
 
 /// Translation stays in a non-activating panel so choosing a language cannot
 /// change the destination app or its insertion point. The recording pipeline
-/// owns stopping, translating, cancellation, and the captured app preference.
+/// owns stopping, transcribing, translating, and cancellation.
 final class TranslationHUDController: NSWindowController {
+    enum Phase {
+        case recording
+        case transcribing
+        case awaitingLanguage
+        case translating
+        case finished
+    }
+
     var onLanguageSelected: ((String) -> Void)?
     var onCancel: (() -> Void)?
+    /// Ends recording only. Translation requires a later language selection.
     var onFinish: (() -> Void)?
 
     private static let panelSize = NSSize(width: 520, height: 388)
     private var statusLabel = NSTextField(labelWithString: "翻譯錄音中")
     private var statusDot = NSTextField(labelWithString: "●")
+    private var instructionLabel = NSTextField(labelWithString: "")
     private var previewText = NSTextView()
     private var previewScroll = NSScrollView()
     private var levelView = TranslationLevelView()
     private var languageButtons: [TranslationHUDButton] = []
-    private var finishButton = TranslationHUDButton(title: "結束並翻譯")
+    private var finishButton = TranslationHUDButton(title: "結束錄音")
     private var cancelButton = TranslationHUDButton(title: "取消")
-    private var isProcessing = false
-    private var selectedLanguage = "英文"
+    private var phase: Phase = .recording
+    private var selectedLanguage: String?
 
     init() {
         let panel = TranslationHUDPanel(
@@ -38,10 +48,9 @@ final class TranslationHUDController: NSWindowController {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func show(language: String, near cursor: NSRect, on screen: NSScreen?) {
-        selectedLanguage = TranslationLanguage.normalizedPromptName(language)
-        setProcessing(false)
-        setStatus("翻譯錄音中")
+    func show(near cursor: NSRect, on screen: NSScreen?) {
+        selectedLanguage = nil
+        setPhase(.recording)
         setText("")
         setAudioLevel(0)
         updateSelection()
@@ -71,20 +80,42 @@ final class TranslationHUDController: NSWindowController {
     }
 
     func setAudioLevel(_ level: Float) {
-        guard !isProcessing else { return }
+        guard phase == .recording else { return }
         levelView.level = level.isFinite ? max(0, min(1, level)) : 0
     }
 
-    func setProcessing(_ processing: Bool) {
-        isProcessing = processing
-        languageButtons.forEach { $0.isEnabled = !processing }
-        finishButton.isEnabled = !processing
+    func setPhase(_ phase: Phase) {
+        self.phase = phase
+        languageButtons.forEach { $0.isEnabled = phase == .awaitingLanguage }
+        finishButton.isEnabled = phase == .recording
         // Cancellation remains available while a transcription/translation is
         // in flight; the pipeline invalidates that session's eventual result.
         cancelButton.isEnabled = true
-        statusDot.textColor = processing ? .secondaryLabelColor : .systemRed
-        levelView.isProcessing = processing
-        if processing { levelView.level = 0 }
+        statusDot.textColor = phase == .recording ? .systemRed : .secondaryLabelColor
+        levelView.isProcessing = phase != .recording
+        if phase != .recording { levelView.level = 0 }
+
+        switch phase {
+        case .recording:
+            selectedLanguage = nil
+            setStatus("翻譯錄音中")
+            instructionLabel.stringValue = "再按一下快捷鍵或點「結束錄音」，先顯示原文"
+        case .transcribing:
+            selectedLanguage = nil
+            setStatus("正在辨識原文…")
+            instructionLabel.stringValue = "辨識完成後，確認原文再選擇翻譯語言"
+        case .awaitingLanguage:
+            selectedLanguage = nil
+            setStatus("原文已就緒，請選擇語言")
+            instructionLabel.stringValue = "確認原文後，點選語言翻譯並送出"
+        case .translating:
+            setStatus("翻譯中…")
+            instructionLabel.stringValue = "正在翻譯，請稍候"
+        case .finished:
+            setStatus("翻譯完成")
+            instructionLabel.stringValue = "翻譯已完成"
+        }
+        updateSelection()
     }
 
     func hide() {
@@ -135,15 +166,16 @@ final class TranslationHUDController: NSWindowController {
             button.target = self
             button.action = #selector(languageClicked(_:))
             button.setAccessibilityLabel("翻譯成\(language.promptName)，\(language.label)")
-            button.setAccessibilityHelp("結束這段錄音，翻譯成\(language.promptName)")
-            button.toolTip = "結束錄音並翻譯成\(language.promptName)"
+            button.setAccessibilityHelp("確認原文後，翻譯成\(language.promptName)並送出")
+            button.toolTip = "將原文翻譯成\(language.promptName)並送出"
             languageButtons.append(button)
             root.addSubview(button)
         }
 
-        root.addSubview(label("點語言結束並翻譯，或放開快捷鍵使用已選語言", size: 11, weight: .regular,
-                              frame: NSRect(x: 24, y: 75, width: 472, height: 17),
-                              color: .secondaryLabelColor))
+        instructionLabel = label("", size: 11, weight: .regular,
+                                 frame: NSRect(x: 24, y: 75, width: 472, height: 17),
+                                 color: .secondaryLabelColor)
+        root.addSubview(instructionLabel)
         cancelButton.frame = NSRect(x: 24, y: 22, width: 72, height: 34)
         cancelButton.target = self
         cancelButton.action = #selector(cancelClicked)
@@ -154,10 +186,10 @@ final class TranslationHUDController: NSWindowController {
         finishButton.isPrimary = true
         finishButton.target = self
         finishButton.action = #selector(finishClicked)
-        finishButton.setAccessibilityLabel("結束錄音並翻譯成已選語言")
+        finishButton.setAccessibilityLabel("結束錄音並顯示原文")
         root.addSubview(finishButton)
         window?.contentView = root
-        updateSelection()
+        setPhase(.recording)
         setText("")
     }
 
@@ -202,14 +234,15 @@ final class TranslationHUDController: NSWindowController {
     }
 
     @objc private func languageClicked(_ sender: NSButton) {
-        guard !isProcessing, TranslationLanguage.targets.indices.contains(sender.tag) else { return }
-        selectedLanguage = TranslationLanguage.targets[sender.tag].promptName
+        guard phase == .awaitingLanguage, TranslationLanguage.targets.indices.contains(sender.tag) else { return }
+        let language = TranslationLanguage.targets[sender.tag].promptName
+        selectedLanguage = language
         updateSelection()
-        onLanguageSelected?(selectedLanguage)
+        onLanguageSelected?(language)
     }
 
     @objc private func finishClicked() {
-        guard !isProcessing else { return }
+        guard phase == .recording else { return }
         onFinish?()
     }
 

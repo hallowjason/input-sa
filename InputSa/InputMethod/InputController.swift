@@ -38,21 +38,11 @@ final class InputController: NSObject {
     private var runLoopSource: CFRunLoopSource?
 
     // MARK: - State
-    /// A modifier-only chord (e.g. hold right-Option) currently recording via the
-    /// flagsChanged path; nil when no modifier-hold action is active. At most one
-    /// modifier-hold action runs at a time.
-    private var activeModifierHoldAction: ShortcutAction?
-    /// Wall-clock start of the modifier-hold press, to debounce macOS' occasional
-    /// double flagsChanged on a single physical key event.
-    private var modifierHoldStartTime: Date?
-    /// A key-combo (e.g. ⌃⌥Q) hold currently recording via the keyDown/keyUp
-    /// path, plus the physical key it owns entirely until release.
-    private var activeKeyHoldAction: ShortcutAction?
-    private var activeKeyHoldKeyCode: Int?
-    /// Bumps every time the modifier-hold state changes, so a pending
-    /// "was that release real?" re-check (see verifyDebouncedRelease) can tell
-    /// it belongs to a session that has since ended and quietly stand down.
-    private var modifierDebounceToken = 0
+    /// Physical key ownership is separate from the recording it toggles.
+    private var shortcutGesture = ShortcutTapGesture<ShortcutAction>()
+    private var activeRecordingAction: ShortcutAction?
+    private var queuedRecordingTapCount = 0
+    private var recordingTapGeneration = 0
     /// Effective binding for every action, snapshotted from ShortcutSettings and
     /// refreshed on any UserDefaults change (i.e. right after the user edits one).
     private var cachedShortcuts: [ShortcutAction: ShortcutRecorderView.Shortcut] = [:]
@@ -71,8 +61,9 @@ final class InputController: NSObject {
     /// translation / ⌥P / 劃詞問答 deliberately do not.
     private var recentUtterances: [(text: String, at: Date)] = []
     private var priorContextAppID: String?
-    /// 劃詞問答 (⌃⌥Q): true while holding Q to record a spoken question, and the
-    /// selection captured the instant Q went down (before the mic opens).
+    /// QA stays busy through transcription and answering; its token rejects
+    /// late callbacks after cancellation or a replacement session.
+    var qaSessionToken: UUID?
     var qaKeyRecording = false
     var qaSelectedText: String?
     /// Cursor rect captured when a select-and-act shortcut fires, so the answer
@@ -102,7 +93,10 @@ final class InputController: NSObject {
         let mask: CGEventMask =
             (1 << CGEventType.keyDown.rawValue)    |
             (1 << CGEventType.keyUp.rawValue)      |
-            (1 << CGEventType.flagsChanged.rawValue)  // Option PTT
+            (1 << CGEventType.flagsChanged.rawValue) |
+            (1 << CGEventType.leftMouseDown.rawValue) |
+            (1 << CGEventType.rightMouseDown.rawValue) |
+            (1 << CGEventType.otherMouseDown.rawValue)
 
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -153,6 +147,10 @@ final class InputController: NSObject {
     }
 
     func stop() {
+        recordingTapGeneration += 1
+        shortcutGesture.reset()
+        activeRecordingAction = nil
+        cancelSelectionQA()
         cancelManualPolish()
         if let token = translationSession?.id { cancelTranslation(token: token) }
         if let token = dictationSession?.id { cancelDictation(token: token) }
@@ -218,63 +216,59 @@ final class InputController: NSObject {
             return Unmanaged.passRetained(event)
         }
 
-        // A chip can stop the microphone while its physical shortcut is still
-        // held. Keep owning that key through release, including when another
-        // window has become key; never leak its autorepeat or keyUp.
-        let ownedKeyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
-        if let action = activeKeyHoldAction,
-           [.translate, .dictation, .correction].contains(action), ownedKeyCode == activeKeyHoldKeyCode,
-           type == .keyDown || type == .keyUp {
-            if type == .keyUp {
-                clearActiveKeyHoldState()
-                stopHoldAction(action)
+        if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(type) {
+            shortcutGesture.cancelPendingGestures()
+            return Unmanaged.passRetained(event)
+        }
+        let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
+        let flags = event.flags
+        let autorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        let editingShortcuts = ShortcutRecorderView.isCapturing
+            || (NSApp.keyWindow != nil && NSApp.keyWindow === PreferencesWindowController.shared.window)
+        if editingShortcuts {
+            shortcutGesture.cancelPendingGestures()
+            if type == .flagsChanged {
+                _ = shortcutGesture.modifierChanged(
+                    keyCode: keyCode, isDown: modifierIsDown(keyCode: keyCode, flags: flags),
+                    modifiers: nsModifierMask(from: flags), matchingAction: nil)
             }
-            return nil
+        }
+
+        // Finish swallowing an owned combo even if Preferences opened since its
+        // keyDown. Cancelling its candidate prevents an unexpected toggle.
+        if type == .keyUp {
+            let result = shortcutGesture.keyUp(keyCode: keyCode)
+            handleShortcutGesture(result)
+            if result.consume { return nil }
+        } else if type == .keyDown, shortcutGesture.hasOwnedKey {
+            let result = shortcutGesture.keyDown(keyCode: keyCode, isRepeat: autorepeat, matchingAction: nil)
+            if result.consume { return nil }
         }
         if type == .flagsChanged {
-            // Wait until the event has left this tap before synthesizing a paste.
             DispatchQueue.main.async { [weak self] in
                 self?.attemptTranslationDelivery()
                 self?.attemptDictationDelivery()
             }
-            if let action = activeModifierHoldAction, [.translate, .dictation, .correction].contains(action) {
-                handleModifierChordChange(keyCode: ownedKeyCode, flags: event.flags)
-                return Unmanaged.passRetained(event)
-            }
         }
-        if type == .keyDown, ownedKeyCode == kVKEscape,
-           let session = translationSession, session.isActive {
-            cancelTranslation(token: session.id)
-            return nil
-        }
-        if type == .keyDown, ownedKeyCode == kVKEscape,
-           let session = dictationSession, session.isActive {
-            cancelDictation(token: session.id)
-            return nil
-        }
-        if type == .keyDown, ownedKeyCode == kVKEscape, manualPolishToken != nil {
+        if type == .keyDown, keyCode == kVKEscape,
+           isRecordingPipelineActive || queuedRecordingTapCount > 0 {
+            recordingTapGeneration += 1
+            shortcutGesture.cancelPendingGestures()
+            activeRecordingAction = nil
+            if let token = translationSession?.id { cancelTranslation(token: token) }
+            if let token = dictationSession?.id { cancelDictation(token: token) }
+            cancelSelectionQA()
             cancelManualPolish()
             return nil
         }
+        if editingShortcuts { return Unmanaged.passRetained(event) }
 
-        // ── Bypass when ShortcutRecorderView is actively capturing a new shortcut,
-        //    OR when the Preferences window is the key window.
-        //    Both conditions ensure the local NSEvent monitor in ShortcutRecorderView fires.
-        if ShortcutRecorderView.isCapturing { return Unmanaged.passRetained(event) }
-        if let keyWin = NSApp.keyWindow, keyWin === PreferencesWindowController.shared.window {
-            return Unmanaged.passRetained(event)
+        if type == .keyDown {
+            recordKeystrokeForAttribution(keyCode: keyCode, flags: flags, event: event)
+            // A modifier used with any ordinary key is a native shortcut, never
+            // a recording toggle. It does not cancel an existing recording.
+            shortcutGesture.invalidateModifierCandidate()
         }
-
-        let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
-        let flags   = event.flags
-
-        if type == .keyDown { recordKeystrokeForAttribution(keyCode: keyCode, flags: flags, event: event) }
-
-        // ── Modifier-only chord engine (flagsChanged): drives every action bound
-        //    to a bare modifier hold. Defaults: right-⌥ dictation, right-⌘
-        //    translate, right-⇧ 口頭加詞 — but any of the seven can be rebound to
-        //    a bare modifier, so this is entirely data-driven from cachedShortcuts.
-        //    Left-side modifiers keep native macOS behaviour unless a user picks one.
         if type == .flagsChanged {
             handleModifierChordChange(keyCode: keyCode, flags: flags)
             return Unmanaged.passRetained(event)
@@ -298,18 +292,6 @@ final class InputController: NSObject {
             return Unmanaged.passRetained(event)
         }
 
-        // ── Key-combo hold ownership: while a key-hold action records, own its
-        //    key entirely — swallow autorepeat keyDowns and catch the keyUp that
-        //    ends recording — so e.g. a held 'Q' (劃詞問答 ⌃⌥Q) never leaks a
-        //    character into the document. Applies to whatever key it's bound to.
-        if let action = activeKeyHoldAction, keyCode == activeKeyHoldKeyCode {
-            if type == .keyUp {
-                clearActiveKeyHoldState()
-                stopHoldAction(action)
-            }
-            return nil
-        }
-
         // ── Pending 口頭加詞 entry: Enter saves, Esc discards, anything else
         //    dismisses and passes through (no stuck modal state).
         if type == .keyDown, let entry = pendingDojoEntry {
@@ -328,25 +310,18 @@ final class InputController: NSObject {
             return Unmanaged.passRetained(event)
         }
 
-        // ── Cancel an in-progress modifier-hold PTT when the held modifier turns
-        //    out to be part of a combo (right-⌘+C, right-⇧+letter): discard the
-        //    recording and let the combo through.
-        if type == .keyDown, let active = activeModifierHoldAction {
-            clearActiveHoldState()
-            cancelActiveRecording(for: active)
-            return Unmanaged.passRetained(event)
-        }
-
-        // ── Data-driven key-combo dispatch (keyDown): match the pressed key +
-        //    modifiers against every action bound to a key combo (not a bare
-        //    modifier). Exact modifier match, so ⌃⌥⇧Q never fires ⌃⌥Q; press
-        //    actions ignore autorepeat, hold actions start once then own the key.
-        if type == .keyDown {
-            let autorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
-            if let action = matchingKeyComboAction(keyCode: keyCode, flags: flags, autorepeat: autorepeat) {
-                dispatchKeyCombo(action, keyCode: keyCode)
-                return nil
+        if type == .keyDown,
+           let action = matchingKeyComboAction(keyCode: keyCode, flags: flags, autorepeat: autorepeat) {
+            if action.isRecordingAction {
+                let result = shortcutGesture.keyDown(keyCode: keyCode, isRepeat: autorepeat, matchingAction: action)
+                // Capture the decision at keyDown. A tap begun while an older
+                // result is processing must not start after that result finishes.
+                if !canArmRecordingTap(action) { shortcutGesture.cancelPendingGestures() }
+                handleShortcutGesture(result)
+            } else if !isAnyRecordingActive || action == .preferences {
+                firePressAction(action)
             }
+            return nil
         }
 
         return Unmanaged.passRetained(event)
@@ -416,9 +391,23 @@ final class InputController: NSObject {
         return m.rawValue
     }
 
-    /// Whether the bare modifier a modifier-only shortcut is bound to is still down.
-    private func modifierStillHeld(_ sc: ShortcutRecorderView.Shortcut, in flags: CGEventFlags) -> Bool {
-        (nsModifierMask(from: flags) & sc.modifierFlags) != 0
+    /// Device bits from IOKit IOLLEvent.h distinguish left/right keys even
+    /// when both Command (or Option/Shift/Control) keys are held together.
+    private func modifierIsDown(keyCode: Int, flags: CGEventFlags) -> Bool {
+        let deviceBit: UInt64
+        switch keyCode {
+        case 54: deviceBit = 0x10   // right Command
+        case 55: deviceBit = 0x08   // left Command
+        case 56: deviceBit = 0x02   // left Shift
+        case 60: deviceBit = 0x04   // right Shift
+        case 58: deviceBit = 0x20   // left Option
+        case 61: deviceBit = 0x40   // right Option
+        case 59: deviceBit = 0x01   // left Control
+        case 62: deviceBit = 0x2000 // right Control
+        case 63: return flags.contains(.maskSecondaryFn)
+        default: return false
+        }
+        return flags.rawValue & deviceBit != 0
     }
 
     /// First action (registry order) whose modifier-only binding exactly matches
@@ -432,114 +421,106 @@ final class InputController: NSObject {
         return nil
     }
 
-    /// First action whose key-combo binding matches this keyDown. Press actions
-    /// ignore autorepeat; hold actions match on the first press (later autorepeat
-    /// is caught by the key-ownership branch once recording starts).
+    /// Exact key-combo matching. Repeats never arm a new tap; an owned key
+    /// consumes its own repeats before this matcher.
     private func matchingKeyComboAction(keyCode: Int, flags: CGEventFlags,
                                         autorepeat: Bool) -> ShortcutAction? {
         let mask = nsModifierMask(from: flags)
         for action in ShortcutAction.allCases {
             guard let sc = cachedShortcuts[action], !sc.isModifierOnly else { continue }
             guard Int(sc.keyCode) == keyCode && sc.modifierFlags == mask else { continue }
-            if !action.isHold && autorepeat { continue }
+            if autorepeat { continue }
             return action
         }
         return nil
     }
 
-    /// flagsChanged engine for modifier-only chord shortcuts. At most one
-    /// modifier-hold action is active; it starts when its bare modifier goes down
-    /// and ends (or fires, for a press action) on release, with a 300 ms debounce
-    /// that absorbs macOS' occasional double flagsChanged on a single press.
     private func handleModifierChordChange(keyCode: Int, flags: CGEventFlags) {
-        if let active = activeModifierHoldAction, let sc = cachedShortcuts[active] {
-            if !modifierStillHeld(sc, in: flags) {
-                let held = modifierHoldStartTime.map { Date().timeIntervalSince($0) } ?? 1.0
-                if active.isHold && held < 0.3 {
-                    NSLog("[InputSa] modifier released too quickly (%.2fs) — debounced", held)
-                    verifyDebouncedRelease(for: active, shortcut: sc)
-                    return   // maybe a spurious double event — the re-check decides
-                }
-                clearActiveHoldState()
-                if active.isHold { stopHoldAction(active) } else { firePressAction(active) }
-            }
+        // Caps Lock is a latch, not a physically held modifier. Including its
+        // latched state would block every later single-modifier tap.
+        guard keyCode != 57 else {
+            shortcutGesture.cancelPendingGestures()
             return
         }
-
-        guard !isAnyRecordingActive else { return }
         let mask = nsModifierMask(from: flags)
-        guard let action = matchingModifierOnlyAction(keyCode: keyCode, mask: mask) else { return }
-        activeModifierHoldAction = action
-        modifierHoldStartTime = Date()
-        modifierDebounceToken += 1   // invalidate any re-check left over from a prior press
-        if action.isHold, !startHoldAction(action, keyCode: keyCode) {
-            clearActiveHoldState()   // mic guard failed etc. — don't wait for a release
+        let matched = matchingModifierOnlyAction(keyCode: keyCode, mask: mask)
+        let eligible = matched.flatMap { action in
+            !action.isRecordingAction || canArmRecordingTap(action) ? action : nil
         }
-        // Press actions bound to a bare modifier fire on release (handled above).
+        let result = shortcutGesture.modifierChanged(
+            keyCode: keyCode, isDown: modifierIsDown(keyCode: keyCode, flags: flags), modifiers: mask,
+            matchingAction: eligible)
+        handleShortcutGesture(result)
     }
 
-    /// Decide, shortly after a sub-300 ms release, whether it was macOS' spurious
-    /// double flagsChanged (keep recording) or a genuine quick tap (discard).
-    ///
-    /// The debounce exists because macOS occasionally emits a phantom release in
-    /// the middle of a single press-and-hold. But at the instant it fires, a real
-    /// tap looks identical — and swallowing a real tap's release used to leave the
-    /// hold armed *forever*: the mic kept recording unnoticed, and the next
-    /// modifier press (⇧ for a capital letter, ⌘⇥, anything) ended that session,
-    /// transcribed whatever ambient noise had accumulated, and pasted the result
-    /// at the cursor. That is the "app randomly types characters" symptom.
-    ///
-    /// The two cases separate a moment later: after a phantom release the key is
-    /// still physically down, after a real tap it is up. So re-read the live
-    /// modifier state and cancel the recording if the key really is up.
-    private func verifyDebouncedRelease(for action: ShortcutAction,
-                                        shortcut sc: ShortcutRecorderView.Shortcut) {
-        modifierDebounceToken += 1
-        let token = modifierDebounceToken
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            guard let self = self,
-                  token == self.modifierDebounceToken,
-                  self.activeModifierHoldAction == action else { return }
-            // Still held ⇒ the release was spurious; the real one is still coming.
-            guard NSEvent.modifierFlags.rawValue & sc.modifierFlags == 0 else { return }
-            inputSaLog("debounced release confirmed as a real tap — discarding \(action.rawValue) recording")
-            self.clearActiveHoldState()
-            self.cancelActiveRecording(for: action)
+    private func handleShortcutGesture(_ result: ShortcutTapGesture<ShortcutAction>.Result) {
+        if let action = result.actionToToggle { completedShortcutTap(action) }
+        if result.releasedOwnership {
+            DispatchQueue.main.async { [weak self] in
+                self?.attemptTranslationDelivery()
+                self?.attemptDictationDelivery()
+            }
         }
     }
 
-    /// keyDown for a matched key-combo action: hold → start + own the key; press → fire.
-    private func dispatchKeyCombo(_ action: ShortcutAction, keyCode: Int) {
-        if action.isHold {
-            guard !isAnyRecordingActive else { return }   // already recording — swallow, don't stack
-            activeKeyHoldAction = action
-            activeKeyHoldKeyCode = keyCode
-            if !startHoldAction(action, keyCode: keyCode) { clearActiveKeyHoldState() }
-        } else {
-            // Press actions other than opening Preferences are skipped mid-recording.
-            guard !isAnyRecordingActive || action == .preferences else { return }
-            firePressAction(action)
+    private func canArmRecordingTap(_ action: ShortcutAction) -> Bool {
+        activeRecordingAction == action || !isRecordingPipelineActive
+    }
+
+    /// Also invalidates taps queued before cancellation, without leaking the
+    /// release of a physical key whose keyDown this app already swallowed.
+    func invalidateRecordingTaps() {
+        recordingTapGeneration += 1
+        shortcutGesture.cancelPendingGestures()
+    }
+
+    private func completedShortcutTap(_ action: ShortcutAction) {
+        guard action.isRecordingAction else {
+            if !isAnyRecordingActive || action == .preferences { firePressAction(action) }
+            return
+        }
+        // Selection AX reads, microphone setup and transcription never run in
+        // the event tap. Queue every tap in order so even two fast taps work.
+        queuedRecordingTapCount += 1
+        let generation = recordingTapGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.queuedRecordingTapCount -= 1
+            guard self.recordingTapGeneration == generation else { return }
+            if let active = self.activeRecordingAction {
+                guard active == action else { return }
+                self.activeRecordingAction = nil
+                self.stopRecordingAction(action)
+            } else {
+                guard !self.isRecordingPipelineActive, !ShortcutRecorderView.isCapturing,
+                      !(NSApp.keyWindow != nil && NSApp.keyWindow === PreferencesWindowController.shared.window) else { return }
+                if self.startRecordingAction(action) {
+                    self.activeRecordingAction = action
+                } else {
+                    self.invalidateRecordingTaps()
+                }
+            }
         }
     }
 
     @discardableResult
-    private func startHoldAction(_ action: ShortcutAction, keyCode: Int) -> Bool {
+    private func startRecordingAction(_ action: ShortcutAction) -> Bool {
         refreshVoiceServiceForRecording()
         if action != .translate { translationHUD.hide() }
         switch action {
-        case .dictation:             return handleVoiceKeyDown()
-        case .correction:            return handleVoiceKeyDown(correction: true)
-        case .translate:             return startTranslationRecording()
-        case .selectionQA:                        return startSelectionQA()
+        case .dictation: return handleVoiceKeyDown()
+        case .correction: return handleVoiceKeyDown(correction: true)
+        case .translate: return startTranslationRecording()
+        case .selectionQA: return startSelectionQA()
         case .manualPolish, .selectionTranslate, .preferences: return false
         }
     }
 
-    private func stopHoldAction(_ action: ShortcutAction) {
+    private func stopRecordingAction(_ action: ShortcutAction) {
         switch action {
-        case .dictation:   handleVoiceKeyUp()
-        case .translate:   translationShortcutReleased()
-        case .correction:  handleVoiceKeyUp(correction: true)
+        case .dictation: handleVoiceKeyUp()
+        case .translate: translationShortcutReleased()
+        case .correction: handleVoiceKeyUp(correction: true)
         case .selectionQA: finishSelectionQA()
         case .manualPolish, .selectionTranslate, .preferences: break
         }
@@ -564,38 +545,6 @@ final class InputController: NSObject {
         }
     }
 
-    /// Tear down an in-progress hold recording (mid-combo cancel). No-op for a
-    /// press action that was merely pending a modifier release.
-    private func cancelActiveRecording(for action: ShortcutAction) {
-        guard action.isHold else { return }
-        if action == .translate, let token = translationSession?.id {
-            cancelTranslation(token: token)
-            return
-        }
-        if action == .dictation || action == .correction, let token = dictationSession?.id {
-            cancelDictation(token: token)
-            return
-        }
-        SystemAudioMute.shared.endMute()   // restore speaker on the combo-cancel path
-        if action == .selectionQA {
-            qaKeyRecording = false
-            qaSelectedText = nil
-        }
-        voiceService.cancelRecording()
-        voiceHUD.hide()
-    }
-
-    private func clearActiveHoldState() {
-        activeModifierHoldAction = nil
-        modifierHoldStartTime = nil
-        modifierDebounceToken += 1   // any pending release re-check is now stale
-    }
-
-    private func clearActiveKeyHoldState() {
-        activeKeyHoldAction = nil
-        activeKeyHoldKeyCode = nil
-    }
-
     // MARK: - AXUIElement Helper
     /// Returns the currently focused UI element, or nil if unavailable.
     private func focusedElement() -> AXUIElement? {
@@ -607,7 +556,7 @@ final class InputController: NSObject {
         return (el as! AXUIElement)
     }
 
-    // MARK: - Voice Push-to-Talk
+    // MARK: - Voice recording
 
     // MARK: - Mic readiness guard
 
@@ -731,7 +680,7 @@ final class InputController: NSObject {
                     // Spoken tail commands (「……請幫我翻譯成英文」) were removed
                     // 2026-07-06: dictated content that legitimately ends with such a
                     // phrase is indistinguishable from a command, so translation is
-                    // shortcut-only now (right-⌘, target language set in Preferences).
+                    // shortcut-only now (right-⌘, language chosen after preview).
                     if correction {
                         _ = self.dictationSession?.receive(snapshot, token: token)
                         self.runDojoVoiceAdd(transcript, token: token)
@@ -820,13 +769,11 @@ final class InputController: NSObject {
     private func startTranslationRecording() -> Bool {
         guard micReadyOrExplain() else { return false }
         refreshVoiceServiceForRecording()
-        // Capture before presenting a panel. Language and target never follow a
-        // later foreground app change while this recording is being processed.
+        // Capture before presenting a panel. The destination never follows a
+        // later foreground app change; language is chosen after source preview.
         let app = NSWorkspace.shared.frontmostApplication
-        let language = TranslationPreferences.shared.language(
-            for: app?.bundleIdentifier, fallback: TranscriptionMode.translateTargetLanguage)
         let session = TranslationSession(appID: app?.bundleIdentifier,
-                                         processID: app?.processIdentifier, language: language)
+                                         processID: app?.processIdentifier)
         let token = session.id
         translationSession = session
         translationSnapshot = nil
@@ -847,7 +794,8 @@ final class InputController: NSObject {
             guard let self = self,
                   self.translationSession?.selectLanguage(language, token: token) == true else { return }
             TranslationPreferences.shared.setLanguage(language, for: self.translationSession?.appID)
-            self.finishTranslationRecording(token: token)
+            self.translationHUD.setPhase(.translating)
+            self.runTranslate(token: token)
         }
         translationHUD.onFinish = { [weak self] in self?.finishTranslationRecording(token: token) }
         translationHUD.onCancel = { [weak self] in self?.cancelTranslation(token: token) }
@@ -864,19 +812,18 @@ final class InputController: NSObject {
                 guard let self = self, self.translationSession?.id == token,
                       self.translationSession?.phase == .recording else { return }
                 self.translationHUD.setText(partial)
-                self.translationHUD.setStatus("暫時字幕 · 放開後辨識完整錄音")
+                self.translationHUD.setStatus("暫時字幕 · 再按一下結束錄音")
             }
         }
         if UserDefaults.standard.bool(forKey: "com.inputsa.muteWhileRecording") {
             SystemAudioMute.shared.beginMute()
         }
         voiceService.startRecording()
-        translationHUD.show(language: language, near: getCursorRect(), on: NSScreen.main)
+        translationHUD.show(near: getCursorRect(), on: NSScreen.main)
         return true
     }
 
-    /// Called only by physical key release. A chip/finish click leaves shortcut
-    /// ownership intact until this point, so keyUp cannot start a second decode.
+    /// The second completed tap stops recording. The first tap only starts it.
     private func translationShortcutReleased() {
         guard let token = translationSession?.id else { return }
         translationSession?.releaseHold(token: token)
@@ -887,10 +834,12 @@ final class InputController: NSObject {
     private func finishTranslationRecording(token: UUID) {
         let durationMs = recordingStartTime.map { Int(Date().timeIntervalSince($0) * 1000) } ?? 0
         guard translationSession?.beginTranscription(token: token, durationMs: durationMs) == true else { return }
+        translationSession?.releaseHold(token: token)
+        if activeRecordingAction == .translate { activeRecordingAction = nil }
         recordingStartTime = nil
         let peak = peakRecordedLevel
         SystemAudioMute.shared.endMute()
-        translationHUD.setProcessing(true)
+        translationHUD.setPhase(.transcribing)
         translationHUD.setStatus("轉錄中…")
         let service = voiceService
         service.stopAndTranscribeDetailed { [weak self] result in
@@ -912,11 +861,11 @@ final class InputController: NSObject {
                         self.translationFailed("沒有收到聲音", token: token)
                         return
                     }
-                    guard self.translationSession?.beginTranslation(token: token) == true else { return }
+                    guard self.translationSession?.finishTranscription(text: spoken, token: token) == true else { return }
                     self.translationSnapshot = snapshot
                     self.saveTranslationHistory(status: .notSent)
                     self.translationHUD.setText(spoken)
-                    self.runTranslate(spoken, token: token)
+                    self.translationHUD.setPhase(.awaitingLanguage)
                 }
             }
         }
@@ -926,6 +875,8 @@ final class InputController: NSObject {
     /// release; late STT/LLM callbacks cannot update the HUD or insert text.
     private func cancelTranslation(token: UUID) {
         guard let session = translationSession, session.id == token, session.isActive else { return }
+        invalidateRecordingTaps()
+        if activeRecordingAction == .translate { activeRecordingAction = nil }
         voiceService.cancelRecording()
         recordingStartTime = nil
         saveTranslationHistory(status: .cancelled)
@@ -941,9 +892,9 @@ final class InputController: NSObject {
         saveTranslationHistory(status: .failed, reason: "翻譯未完成，原稿已保留")
         // Preserve the failure on the non-activating panel, without entering a
         // modal alert while the user may still be holding Command or Option.
-        guard let language = translationSession?.language else { return }
-        translationHUD.show(language: language, near: getCursorRect(), on: NSScreen.main)
-        translationHUD.setProcessing(true)
+        translationHUD.show(near: getCursorRect(), on: NSScreen.main)
+        translationHUD.setPhase(.finished)
+        translationHUD.setText(translationSnapshot?.normalizedText ?? "")
         translationHUD.setStatus(message)
         translationHUD.onCancel = { [weak self] in
             guard self?.translationSession?.id == token else { return }
@@ -953,21 +904,22 @@ final class InputController: NSObject {
     }
 
     /// Unlike polish, failed translation never injects the source transcript.
-    private func runTranslate(_ transcript: String, token: UUID) {
-        guard let session = translationSession, session.id == token, session.phase == .translating else { return }
+    private func runTranslate(token: UUID) {
+        guard let session = translationSession, session.id == token, session.phase == .translating,
+              let language = session.language, let transcript = session.sourceText else { return }
         guard !APIKeyStore.shared.geminiKey.isEmpty else {
             translationFailed("語音翻譯需要 Gemini API Key，請在偏好設定填入。", token: token)
             return
         }
-        translationHUD.setStatus("翻譯成\(session.language)…")
+        translationHUD.setStatus("翻譯成\(language)…")
         GeminiPolishService.shared.enhance(
             text: transcript,
-            mode: .translate(to: session.language),
+            mode: .translate(to: language),
             onPartial: { [weak self] partial in
                 DispatchQueue.main.async {
                     guard let self = self, self.translationSession?.id == token,
                           self.translationSession?.phase == .translating else { return }
-                    self.translationHUD.setText(partial)
+                    self.translationHUD.setText("\(partial)\n(\(transcript))")
                 }
             }
         ) { [weak self] result in
@@ -979,11 +931,13 @@ final class InputController: NSObject {
                     self.debugLog("translate OK (\(transcript.count) → \(translated.count) chars)")
                     let out = TranscriptNumberFormatter.format(translated)
                     self.translationAIText = translated
-                    guard self.translationSession?.finish(text: out, token: token) == true else {
+                    guard self.translationSession?.finish(text: out, token: token) == true,
+                          let outputText = self.translationSession?.outputText else {
                         self.translationFailed("翻譯結果為空，沒有輸出文字。", token: token)
                         return
                     }
-                    self.translationHUD.setText(out)
+                    self.translationHUD.setText(outputText)
+                    self.translationHUD.setPhase(.finished)
                     self.translationHUD.setStatus("翻譯完成，放開快捷鍵後貼上")
                     self.attemptTranslationDelivery()
                 case .failure(let err):
@@ -997,13 +951,13 @@ final class InputController: NSObject {
     private func attemptTranslationDelivery() {
         guard let session = translationSession, session.phase == .ready else { return }
         let modifiers: NSEvent.ModifierFlags = [.command, .option, .control, .shift, .function]
-        let modifiersReleased = NSEvent.modifierFlags.intersection(modifiers).isEmpty
+        let modifiersReleased = NSEvent.modifierFlags.intersection(modifiers).isEmpty && !shortcutGesture.hasOwnedKey
         let foregroundPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         guard let delivery = translationSession?.takeDelivery(
             token: session.id, frontmostPID: foregroundPID, modifiersReleased: modifiersReleased) else { return }
         if delivery.destination == .originalApp {
             finishAndInject(delivery.text)
-            translationHUD.setStatus("已送出\(session.language)")
+            translationHUD.setStatus("已送出譯文與中文原文")
         } else {
             // Do not restore an older clipboard over this fallback. A preceding
             // ordinary paste may still have its 300 ms restore timer pending.
@@ -1012,7 +966,7 @@ final class InputController: NSObject {
             recordingTargetElement = nil
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(delivery.text, forType: .string)
-            translationHUD.setStatus("已切換 App：譯文已複製，請自行貼上")
+            translationHUD.setStatus("已切換 App：雙語文字已複製，請自行貼上")
         }
         saveTranslationHistory(status: delivery.destination == .originalApp ? .sent : .copied,
                                finalText: delivery.text)
@@ -1036,6 +990,8 @@ final class InputController: NSObject {
 
     private func cancelDictation(token: UUID) {
         guard dictationSession?.id == token, dictationSession?.isActive == true else { return }
+        invalidateRecordingTaps()
+        if activeRecordingAction == .dictation || activeRecordingAction == .correction { activeRecordingAction = nil }
         dictationSession?.cancel(token: token)
         dictationPolishRequest?.cancel()
         dictationPolishRequest = nil
@@ -1063,7 +1019,7 @@ final class InputController: NSObject {
         let modifiers: NSEvent.ModifierFlags = [.command, .option, .control, .shift, .function]
         guard let delivery = dictationSession?.takeDelivery(
             token: session.id, frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
-            modifiersReleased: NSEvent.modifierFlags.intersection(modifiers).isEmpty) else { return }
+            modifiersReleased: NSEvent.modifierFlags.intersection(modifiers).isEmpty && !shortcutGesture.hasOwnedKey) else { return }
         let copied = delivery.destination == .clipboard
         if copied { keepInClipboard(delivery.text) }
         else { finishAndInject(delivery.text) }
@@ -1111,7 +1067,7 @@ final class InputController: NSObject {
         guard let session = translationSession, let snapshot = translationSnapshot else { return }
         persistHistory(.init(id: session.id, date: translationStartedAt, rawText: snapshot.rawText,
                             normalizedText: snapshot.normalizedText, aiText: translationAIText, finalText: finalText,
-                            engine: "\(snapshot.engine) → Gemini（\(session.language)）", durationMs: session.durationMs,
+                            engine: "\(snapshot.engine) → \(session.language.map { "Gemini（\($0)）" } ?? "待選翻譯語言")", durationMs: session.durationMs,
                             fallbackReason: reason, status: status,
                             appName: translationAppName, appBundleID: session.appID), generation: translationHistoryGeneration)
     }
@@ -1260,13 +1216,15 @@ final class InputController: NSObject {
 
     // MARK: - Shared select-and-act helpers
 
-    /// True while any recording/PTT is in flight — select-and-act shortcuts must
-    /// not interrupt an ongoing dictation/translation/correction/QA session.
-    var isAnyRecordingActive: Bool {
-        activeModifierHoldAction != nil || activeKeyHoldAction != nil || qaKeyRecording
-            || translationSession?.isActive == true
-            || dictationSession?.isActive == true
+    private var isRecordingPipelineActive: Bool {
+        activeRecordingAction != nil || qaSessionToken != nil
+            || translationSession?.isActive == true || dictationSession?.isActive == true
             || manualPolishToken != nil
+    }
+
+    /// Includes queued microphone work so another feature cannot race its start.
+    var isAnyRecordingActive: Bool {
+        isRecordingPipelineActive || queuedRecordingTapCount > 0 || shortcutGesture.hasOwnedKey
     }
 
     /// Brief non-blocking HUD toast (e.g. "沒有選取文字"), auto-hidden after 1.2 s.

@@ -30,7 +30,7 @@ final class DictationHUDController {
     private let characterView = NSImageView()
     private let transcript = NSTextView()
     private let level = NSLevelIndicator()
-    private let footer = NSTextField(labelWithString: "放開快捷鍵送出 · Esc 取消")
+    private let footer = NSTextField(labelWithString: "再按一下結束 · Esc 取消")
     private var elapsedTimer: Timer?
     private var startedAt: Date?
     var onCancel: (() -> Void)?
@@ -128,9 +128,9 @@ final class DictationHUDController {
         status.frame = NSRect(x: 110, y: 125, width: 205, height: 20)
         transcript.string = hasLiveTranscript
             ? "正在聆聽…"
-            : "正在聆聽，放開後辨識…"
+            : "正在聆聽，再按一下結束…"
         transcript.textColor = .tertiaryLabelColor
-        footer.stringValue = "放開快捷鍵送出 · Esc 取消"
+        footer.stringValue = "再按一下結束 · Esc 取消"
         startedAt = Date()
         elapsedTimer?.invalidate()
         updateTime()
@@ -144,7 +144,7 @@ final class DictationHUDController {
         transcript.string = text
         transcript.textColor = .labelColor
         transcript.scrollToEndOfDocument(nil)
-        if provisional { footer.stringValue = "暫時字幕 · 放開後辨識全文 · Esc 取消" }
+        if provisional { footer.stringValue = "暫時字幕 · 再按一下結束 · Esc 取消" }
     }
 
     func setStatus(_ text: String, cancellable: Bool = true) {

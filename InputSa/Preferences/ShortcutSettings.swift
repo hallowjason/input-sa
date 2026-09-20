@@ -1,20 +1,20 @@
 import AppKit
 
 /// The seven user-facing shortcut actions. Each one owns a display name, a
-/// shipping default, and whether it is a hold (push-to-talk) or a single press.
+/// shipping default, and whether it toggles recording or runs a single action.
 /// The event tap (`InputController.handle`) is driven entirely by this registry
 /// plus `ShortcutSettings`, so every action is user-rebindable from Preferences.
 enum ShortcutAction: String, CaseIterable {
-    case dictation          // 語音聽寫   (hold)
-    case translate          // 即時翻譯   (hold)
-    case correction         // 口頭修正   (hold)
+    case dictation          // 語音聽寫   (recording toggle)
+    case translate          // 語音翻譯   (recording toggle)
+    case correction         // 口頭修正   (recording toggle)
     case manualPolish       // 選字潤飾   (press)
-    case selectionQA        // 劃詞問答   (hold)
+    case selectionQA        // 劃詞問答   (recording toggle)
     case selectionTranslate // 劃詞翻譯   (press)
     case preferences        // 偏好設定   (press)
 
-    /// Hold = push-to-talk (start on key-down, act on release). Press = fire once.
-    var isHold: Bool {
+    /// Recording actions alternate start/stop on completed taps; others fire once.
+    var isRecordingAction: Bool {
         switch self {
         case .dictation, .translate, .correction, .selectionQA: return true
         case .manualPolish, .selectionTranslate, .preferences:  return false
@@ -24,7 +24,7 @@ enum ShortcutAction: String, CaseIterable {
     var titleZh: String {
         switch self {
         case .dictation:          return "語音聽寫"
-        case .translate:          return "即時翻譯"
+        case .translate:          return "語音翻譯"
         case .correction:         return "口頭加詞"
         case .manualPolish:       return "選字潤飾"
         case .selectionQA:        return "劃詞問答"
@@ -35,18 +35,18 @@ enum ShortcutAction: String, CaseIterable {
 
     var subtitleZh: String {
         switch self {
-        case .dictation:          return "說話 → 轉錄 → AI 潤飾 → 輸出至游標"
-        case .translate:          return "說中文，點面板語言切換；各 App 記住上次的選擇"
-        case .correction:         return "說詞條釋義，Enter 確認加入字詞庫"
+        case .dictation:          return "按一下開始，再按一下結束；整理後輸出至游標"
+        case .translate:          return "按兩次完成錄音，確認原文後點語言翻譯並送出"
+        case .correction:         return "按兩次錄下詞條釋義，Enter 確認加入字詞庫"
         case .manualPolish:       return "選取文字後按，Enter 接受、Esc 取消"
-        case .selectionQA:        return "選取文字後按住說問題，放開顯示答案"
+        case .selectionQA:        return "選取文字後按一下說問題，再按一下取得答案"
         case .selectionTranslate: return "選取文字後按，浮窗顯示譯文（英／泰）"
         case .preferences:        return "開啟本視窗"
         }
     }
 
-    /// The shipping default binding. Hold actions default to a bare right-side
-    /// modifier chord (walkie-talkie feel); press/selection actions default to a
+    /// The shipping default binding. Recording actions use a bare right-side
+    /// modifier tap where possible; press/selection actions default to a
     /// key + modifier combo.
     var defaultShortcut: ShortcutRecorderView.Shortcut {
         typealias SC = ShortcutRecorderView.Shortcut
@@ -66,7 +66,7 @@ enum ShortcutAction: String, CaseIterable {
 
 extension ShortcutRecorderView.Shortcut {
     /// HID keycodes for the physical modifier keys. A shortcut whose keyCode is
-    /// one of these is a "modifier-only chord" (e.g. hold right-Option) detected
+    /// one of these is a "modifier-only chord" (e.g. tap right-Option) detected
     /// via flagsChanged; anything else is a key(+modifiers) combo via keyDown.
     static let modifierKeyCodes: Set<UInt16> = [54, 55, 56, 57, 58, 59, 60, 61, 62, 63]
 

@@ -1,6 +1,6 @@
 import AppKit
 
-/// Single-column settings with general/advanced capsule navigation. Existing
+/// Single-column settings with one always-visible row of page buttons. Existing
 /// controls and persistence remain in the tab builders; the header only routes.
 ///
 /// The builders live in sibling files (PreferencesVoiceServiceTab / …Shortcuts /
@@ -54,7 +54,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
     static let polishProviders: [APIKeyStore.PolishProvider] = [.gemini, .apple, .codex, .claude]
     // Shortcuts pane — one recorder per action (all seven are user-rebindable)
     var shortcutRecorders: [ShortcutAction: ShortcutRecorderView] = [:]
-    var translatePopUp: NSPopUpButton!
     var shortcutWarningLabel: NSTextField!
     // Custom-modes pane
     var promptCardList: CardListView!
@@ -114,19 +113,19 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
         guard let contentView = window?.contentView else { return }
 
         sidebar = PreferencesSidebar(items: [
-            .init(title: "語音服務", symbol: "waveform"),
+            .init(title: "語音與整理", symbol: "waveform"),
             .init(title: "快捷鍵", symbol: "keyboard"),
-            .init(title: "AI 模式", symbol: "sparkles"),
             .init(title: "字詞庫", symbol: "character.book.closed"),
+            .init(title: "AI 模式", symbol: "sparkles"),
             .init(title: "使用統計", symbol: "chart.bar.xaxis"),
         ], selectedIndex: 0)
         sidebar.onSelect = { [weak self] idx in self?.showPane(idx) }
 
         panes = [
-            makePane(title: "語音服務", content: makeVoiceServiceContent()),
+            makePane(title: "語音與整理", content: makeVoiceServiceContent()),
             makePane(title: "快捷鍵", content: makeShortcutsContent()),
-            makePane(title: "AI 模式", content: makeModesContent()),
             makePane(title: "字詞庫", content: makeDojoContent()),
+            makePane(title: "AI 模式", content: makeModesContent()),
             makePane(title: "使用統計", content: makeDashboardContent()),
         ]
 
@@ -154,7 +153,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
     /// One scrolling content pane: 22-pt pane title, then the tab's groups.
     private func makePane(title: String, content: NSView) -> NSScrollView {
         let subtitles = [
-            "語音服務": "先選擇如何辨識，再決定用什麼整理。",
+            "語音與整理": "先選擇如何辨識，再決定用什麼整理。",
             "快捷鍵": "把常用動作放在順手的位置。",
             "AI 模式": "保留你的語氣，為不同情境安排不同格式。",
             "字詞庫": "人名、專有名詞與慣用拼寫，集中放在這裡。",
@@ -240,7 +239,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate,
         voiceProviderChoices?.select(providerPicker?.indexOfSelectedItem ?? 0)
         polishProviderChoices?.select(polishProviderPicker?.indexOfSelectedItem ?? 0)
         cleanupStyleChoices?.select(cleanupStylePicker?.indexOfSelectedItem ?? 1)
-        translatePopUp?.selectItem(withTitle: TranscriptionMode.translateTargetLanguage)
         updateServiceSectionVisibility()
         updateProviderStatus()
         updatePolishProviderStatus()

@@ -1,16 +1,12 @@
 import AppKit
 
 /// A compact settings header. The legacy name preserves controller references;
-/// navigation is now a two-level, keyboard-accessible group of native buttons.
+/// all five pages stay visible in one keyboard-accessible row of native buttons.
 final class PreferencesSidebar: NSView {
     struct Item { let title: String; let symbol: String }
     var onSelect: ((Int) -> Void)?
-    private let groups = [[1, 3, 4], [0, 2]]
-    private var lastSelection = [1, 0]
     private var buttons: [SoftPillButton] = []
-    private let levelPicker = SoftSegmentedPicker(labels: ["一般", "進階"])
     private let navigation = NSStackView()
-    private var currentGroup = 0
 
     init(items: [Item], selectedIndex: Int) {
         super.init(frame: .zero)
@@ -31,19 +27,15 @@ final class PreferencesSidebar: NSView {
         labels.orientation = .vertical
         labels.alignment = .leading
         labels.spacing = 3
-        let identity = NSStackView(views: [icon, labels, NSView(), levelPicker])
+        let identity = NSStackView(views: [icon, labels, NSView()])
         identity.orientation = .horizontal
         identity.alignment = .centerY
         identity.spacing = 12
         identity.translatesAutoresizingMaskIntoConstraints = false
-        levelPicker.widthAnchor.constraint(equalToConstant: 170).isActive = true
-        levelPicker.onSelect = { [weak self] group in
-            guard let self else { return }
-            self.select(self.lastSelection[group])
-            self.onSelect?(self.lastSelection[group])
-        }
         buttons = items.enumerated().map { index, item in
             let button = SoftPillButton(title: item.title, symbol: item.symbol)
+            button.setContentCompressionResistancePriority(.required, for: .horizontal)
+            button.setAccessibilityHelp("顯示\(item.title)設定")
             button.onPress = { [weak self] in
                 self?.select(index)
                 self?.onSelect?(index)
@@ -54,6 +46,7 @@ final class PreferencesSidebar: NSView {
         navigation.alignment = .centerY
         navigation.spacing = 6
         navigation.translatesAutoresizingMaskIntoConstraints = false
+        buttons.forEach { navigation.addArrangedSubview($0) }
         addSubview(identity)
         addSubview(navigation)
         NSLayoutConstraint.activate([
@@ -64,19 +57,14 @@ final class PreferencesSidebar: NSView {
             navigation.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 30),
             navigation.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -28),
         ])
-        select(selectedIndex)
+        // There is no persisted category/group to migrate. Keep invalid or old
+        // callers on the first real page instead of leaving an empty header.
+        select(buttons.indices.contains(selectedIndex) ? selectedIndex : 0)
     }
     required init?(coder: NSCoder) { fatalError() }
 
     func select(_ index: Int) {
-        guard buttons.indices.contains(index), let group = groups.firstIndex(where: { $0.contains(index) }) else { return }
-        if navigation.arrangedSubviews.isEmpty || group != currentGroup {
-            navigation.arrangedSubviews.forEach { $0.removeFromSuperview() }
-            groups[group].forEach { navigation.addArrangedSubview(buttons[$0]) }
-        }
-        currentGroup = group
-        lastSelection[group] = index
-        levelPicker.select(group)
+        guard buttons.indices.contains(index) else { return }
         for (i, button) in buttons.enumerated() { button.selected = i == index }
     }
 }
