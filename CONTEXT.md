@@ -1,6 +1,6 @@
-# Session Context — 2026-09-20 v3.2.0 已安裝，待發布
+# Session Context — 2026-09-20 v3.2.0 已安裝與發布
 
-## 本輪需求與進度
+## 上次完成
 - 使用者明確要求：翻譯先顯示中文原稿，再點選語言才翻譯；輸出譯文在上，原中文加半形括號另起一行。Session 已新增 awaitingLanguage 與本地雙語組合，60/60 測試通過。
 - 使用者答覆：全部四種原長按功能改為一次點按開始、第二次點按結束（dictation/translate/correction/selectionQA）。已接 ShortcutTapGesture 與 controller，兩種實體鍵皆完整tap release時切換；原生Cmd+C/Shift字母/滑鼠組合不開錄音，queued main work不堵event tap。純 gesture 73/73 通過。
 - QA 增加 qaSessionToken 到回答完成，阻止第三下在處理中重開，取消與遲到回呼有 guard；Caps Lock、不重開錄音、按鍵釋放才送出、偏好設定切換與取消 generation 均完成測試及 review。
@@ -8,13 +8,20 @@
 - 使用者另要求『規劃』會議紀錄：錄音匯入、現場即時轉錄+潤稿+分人。tasks/meeting-transcription-plan.md 已完成官方來源研究；本輪不實作會議功能。
 - 最終完整 build、14 套／459 項隔離測試、64 項 controller 整合檢查（舊版可重現 8 項失敗，修正後全過）、獨立審查通過。最終四行使用者說明更新後完整 build 再次通過。建置在 /private/tmp/inputsa-v3.2-build。
 - v3.2.0/build 13 已安裝至 ~/Applications/Input-sa.app，固定簽章 DR 與舊版完全一致；字詞庫、Whisper 模型 SHA-256 及主要偏好雜湊比對一致。SIGTERM 0.031 秒正常退出，重啟 PID 51983 event tap enabled。舊版備份 ~/Applications/.inputsa-backups/20260920T122757Z-51802/Input-sa.app。
-- 無模型公開包已簽章／解壓驗簽：Input-sa-v3.2.0.zip，16,356,598 bytes，SHA-256 7e6e13ccdbde701732b46917840dfa49faf4c6ee8ed4faef282a8aee515e724a。尚待 GitHub 發布與遠端核對。
+- [v3.2.0 Release](https://github.com/hallowjason/input-sa/releases/tag/v3.2.0) 已公開，tag 指向 f1a758bae78c77610ecb5400cf1d3f0b5cad3ce9。無模型包 Input-sa-v3.2.0.zip 已簽章／解壓驗簽，16,356,598 bytes，SHA-256 7e6e13ccdbde701732b46917840dfa49faf4c6ee8ed4faef282a8aee515e724a；ZIP 與 checksum 兩個 GitHub 附件的檔名、大小、digest 均與本機一致。
+- 清除本輪可再生 build 與逐一核對遠端 digest 的 v3.1.1 ZIP/checksum，只留最新包。工作目錄 576,052 KiB（約 562.6 MiB），原 design-refs、SenseVoice、Paraformer 備份保留，未加入常駐服務或新 UI 框架。
 
-## 下一步
-- 實作、UI、審查、測試、打包與安裝均已完成。提交／推送、建立 v3.2.0 release 後核對 tag 與兩個公開附件 SHA；再刪已核對遠端的 v3.1.1 包與可再生 build，保持約 562 MiB 工作路徑。
-- README/release-v3.2.0/todo 已更新；發布後更新本段與 todo。保留固定 cert，不重設 TCC；原引擎偏好保持不變，翻譯／QA／口頭加詞仍使用 Gemini。
+## 待辦 / 未完成
+- 本輪實作、介面、測試、打包、安裝、發布及工作路徑整理均已完成。後續依使用者實際使用回饋調整；會議功能已交付規劃，尚未授權本輪實作。
+
+## 重要決策與限制
+- README/release-v3.2.0/todo 已更新。保留固定 cert，不重設 TCC；原引擎偏好保持不變，翻譯／QA／口頭加詞仍使用 Gemini。
 - git工作樹原有untracked design-refs勿動。CONTEXT先前stop hook再度覆蓋成placeholder，已從HEAD完整恢复歷史於下。
 - 驗證報告 /private/tmp/inputsa-v3.2-verification/；controller 重跑方法 /private/tmp/inputsa-toggle-integration/README.md。測試為隔離外部邊界，不代表真人硬體與個人口音準確率實測。會議方案仍只有規劃，勿宣稱已實作。
+
+## 下次繼續
+cd /Users/gooo/Desktop/.claude/projects/input-sa
+# 從已發布安裝的 v3.2.0 接續回饋；不要重做本輪更新。會議開發以 tasks/meeting-transcription-plan.md 為起點。
 
 ## Agent ownership
 - root: InputController.swift、SelectionActions.swift、TranslationSession/tests、ShortcutSettings、PreferencesShortcutsTab、DictationHUD、docs/tools/test.sh/version。
